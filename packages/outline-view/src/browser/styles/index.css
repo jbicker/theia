@@ -17,3 +17,8 @@
 .outline-view-tab-icon::before {
     content: "\f03a"
 }
+
+.no-outline {
+    color: var(--theia-ui-font-color2);
+    padding: 10px;
+}
