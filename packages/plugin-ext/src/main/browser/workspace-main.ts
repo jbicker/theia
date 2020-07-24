@@ -16,67 +16,128 @@
 
 import * as theia from '@theia/plugin';
 import { interfaces, injectable } from 'inversify';
-import { WorkspaceExt, MAIN_RPC_CONTEXT, WorkspaceMain, WorkspaceFolderPickOptionsMain } from '../../api/plugin-api';
-import { RPCProtocol } from '../../api/rpc-protocol';
-import { WorkspaceService } from '@theia/workspace/lib/browser';
-import Uri from 'vscode-uri';
-import { UriComponents } from '../../common/uri-components';
-import { Path } from '@theia/core/lib/common/path';
+import { WorkspaceExt, StorageExt, MAIN_RPC_CONTEXT, WorkspaceMain, WorkspaceFolderPickOptionsMain } from '../../common/plugin-api-rpc';
+import { RPCProtocol } from '../../common/rpc-protocol';
+import { URI as Uri } from 'vscode-uri';
+import { UriComponents, theiaUritoUriComponents } from '../../common/uri-components';
 import { QuickOpenModel, QuickOpenItem, QuickOpenMode } from '@theia/core/lib/browser/quick-open/quick-open-model';
 import { MonacoQuickOpenService } from '@theia/monaco/lib/browser/monaco-quick-open-service';
 import { FileStat } from '@theia/filesystem/lib/common';
 import { FileSearchService } from '@theia/file-search/lib/common/file-search-service';
 import URI from '@theia/core/lib/common/uri';
+import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { Resource } from '@theia/core/lib/common/resource';
-import { Emitter, Event, Disposable, ResourceResolver } from '@theia/core';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
+import { Emitter, Event, ResourceResolver, CancellationToken } from '@theia/core';
+import { FileWatcherSubscriberOptions } from '../../common/plugin-api-rpc-model';
+import { InPluginFileSystemWatcherManager } from './in-plugin-filesystem-watcher-manager';
+import { PluginServer } from '../../common/plugin-protocol';
+import { FileSystemPreferences, FileSystemWatcher } from '@theia/filesystem/lib/browser';
+import { SearchInWorkspaceService } from '@theia/search-in-workspace/lib/browser/search-in-workspace-service';
 
-export class WorkspaceMainImpl implements WorkspaceMain {
+export class WorkspaceMainImpl implements WorkspaceMain, Disposable {
 
-    private proxy: WorkspaceExt;
+    private readonly proxy: WorkspaceExt;
+
+    private storageProxy: StorageExt;
 
     private quickOpenService: MonacoQuickOpenService;
 
     private fileSearchService: FileSearchService;
 
+    private searchInWorkspaceService: SearchInWorkspaceService;
+
+    private inPluginFileSystemWatcherManager: InPluginFileSystemWatcherManager;
+
     private roots: FileStat[];
 
     private resourceResolver: TextContentResourceResolver;
 
+    private pluginServer: PluginServer;
+
+    private workspaceService: WorkspaceService;
+
+    private fsPreferences: FileSystemPreferences;
+
+    private fileSystemWatcher: FileSystemWatcher;
+
+    protected readonly toDispose = new DisposableCollection();
+
+    protected workspaceSearch: Set<number> = new Set<number>();
+
     constructor(rpc: RPCProtocol, container: interfaces.Container) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.WORKSPACE_EXT);
+        this.storageProxy = rpc.getProxy(MAIN_RPC_CONTEXT.STORAGE_EXT);
         this.quickOpenService = container.get(MonacoQuickOpenService);
-        const workspaceService = container.get(WorkspaceService);
         this.fileSearchService = container.get(FileSearchService);
+        this.searchInWorkspaceService = container.get(SearchInWorkspaceService);
         this.resourceResolver = container.get(TextContentResourceResolver);
+        this.pluginServer = container.get(PluginServer);
+        this.workspaceService = container.get(WorkspaceService);
+        this.fsPreferences = container.get(FileSystemPreferences);
+        this.fileSystemWatcher = container.get(FileSystemWatcher);
+        this.inPluginFileSystemWatcherManager = container.get(InPluginFileSystemWatcherManager);
 
-        workspaceService.roots.then(roots => {
-            this.roots = roots;
-            this.notifyWorkspaceFoldersChanged();
-        });
+        this.processWorkspaceFoldersChanged(this.workspaceService.tryGetRoots());
+        this.toDispose.push(this.workspaceService.onWorkspaceChanged(roots => {
+            this.processWorkspaceFoldersChanged(roots);
+        }));
+
+        this.toDispose.push(this.fileSystemWatcher.onWillCreate(event => {
+            event.waitUntil(this.proxy.$onWillCreateFiles({ files: [theiaUritoUriComponents(event.uri)] }));
+        }));
+        this.toDispose.push(this.fileSystemWatcher.onDidCreate(event => {
+            this.proxy.$onDidCreateFiles({ files: [theiaUritoUriComponents(event.uri)] });
+        }));
+        this.toDispose.push(this.fileSystemWatcher.onWillMove(event => {
+            event.waitUntil(this.proxy.$onWillRenameFiles({
+                files: [{
+                    oldUri: theiaUritoUriComponents(event.sourceUri),
+                    newUri: theiaUritoUriComponents(event.targetUri),
+                }],
+            }));
+        }));
+        this.toDispose.push(this.fileSystemWatcher.onDidMove(event => {
+            this.proxy.$onDidRenameFiles({
+                files: [{
+                    oldUri: theiaUritoUriComponents(event.sourceUri),
+                    newUri: theiaUritoUriComponents(event.targetUri),
+                }],
+            });
+        }));
+        this.toDispose.push(this.fileSystemWatcher.onWillDelete(event => {
+            event.waitUntil(this.proxy.$onWillDeleteFiles({ files: [theiaUritoUriComponents(event.uri)] }));
+        }));
+        this.toDispose.push(this.fileSystemWatcher.onDidDelete(event => {
+            this.proxy.$onDidDeleteFiles({ files: [theiaUritoUriComponents(event.uri)] });
+        }));
     }
 
-    notifyWorkspaceFoldersChanged() {
-        if (this.roots && this.roots.length) {
-            const folders = this.roots.map(root => {
-                const uri = Uri.parse(root.uri);
-                const path = new Path(uri.path);
-                return {
-                    uri: uri,
-                    name: path.base,
-                    index: 0
-                } as theia.WorkspaceFolder;
-            });
+    dispose(): void {
+        this.toDispose.dispose();
+    }
 
-            this.proxy.$onWorkspaceFoldersChanged({
-                added: folders,
-                removed: []
-            } as theia.WorkspaceFoldersChangeEvent);
-        } else {
-            this.proxy.$onWorkspaceFoldersChanged({
-                added: [],
-                removed: []
-            } as theia.WorkspaceFoldersChangeEvent);
+    protected async processWorkspaceFoldersChanged(roots: FileStat[]): Promise<void> {
+        if (this.isAnyRootChanged(roots) === false) {
+            return;
         }
+        this.roots = roots;
+        this.proxy.$onWorkspaceFoldersChanged({ roots });
+
+        const keyValueStorageWorkspacesData = await this.pluginServer.getAllStorageValues({
+            workspace: this.workspaceService.workspace,
+            roots: this.workspaceService.tryGetRoots()
+        });
+        this.storageProxy.$updatePluginsWorkspaceData(keyValueStorageWorkspacesData);
+
+    }
+
+    private isAnyRootChanged(roots: FileStat[]): boolean {
+        if (!this.roots || this.roots.length !== roots.length) {
+            return true;
+        }
+
+        return this.roots.some((root, index) => root.uri !== roots[index].uri);
     }
 
     $pickWorkspaceFolder(options: WorkspaceFolderPickOptionsMain): Promise<theia.WorkspaceFolder | undefined> {
@@ -127,7 +188,7 @@ export class WorkspaceMainImpl implements WorkspaceMain {
                 placeholder: options.placeHolder,
                 onClose: () => {
                     if (activeElement) {
-                        activeElement.focus();
+                        activeElement.focus({ preventScroll: true });
                     }
 
                     resolve(returnValue);
@@ -136,34 +197,119 @@ export class WorkspaceMainImpl implements WorkspaceMain {
         });
     }
 
-    $startFileSearch(includePattern: string, excludePatternOrDisregardExcludes?: string | false,
-        maxResults?: number, token?: theia.CancellationToken): Promise<UriComponents[]> {
-        const uris: UriComponents[] = new Array();
-        let j = 0;
-        const promises: Promise<any>[] = new Array();
-        for (const root of this.roots) {
-            promises[j++] = this.fileSearchService.find(includePattern, { rootUri: root.uri }).then(value => {
-                const paths: string[] = new Array();
-                let i = 0;
-                value.forEach(item => {
-                    let path: string;
-                    path = root.uri.endsWith('/') ? root.uri + item : root.uri + '/' + item;
-                    paths[i++] = path;
-                });
-                return Promise.resolve(paths);
-            });
+    async $startFileSearch(includePattern: string, includeFolderUri: string | undefined, excludePatternOrDisregardExcludes?: string | false,
+        maxResults?: number): Promise<UriComponents[]> {
+        const roots: FileSearchService.RootOptions = {};
+        const rootUris = includeFolderUri ? [includeFolderUri] : this.roots.map(r => r.uri);
+        for (const rootUri of rootUris) {
+            roots[rootUri] = {};
         }
-        return Promise.all(promises).then(value => {
-            let i = 0;
-            value.forEach(path => {
-                uris[i++] = Uri.parse(path);
+        const opts: FileSearchService.Options = { rootOptions: roots };
+        if (includePattern) {
+            opts.includePatterns = [includePattern];
+        }
+        if (typeof excludePatternOrDisregardExcludes === 'string') {
+            opts.excludePatterns = [excludePatternOrDisregardExcludes];
+        }
+        if (excludePatternOrDisregardExcludes !== false) {
+            for (const rootUri of rootUris) {
+                const filesExclude = this.fsPreferences.get('files.exclude', undefined, rootUri);
+                if (filesExclude) {
+                    for (const excludePattern in filesExclude) {
+                        if (filesExclude[excludePattern]) {
+                            const rootOptions = roots[rootUri];
+                            const rootExcludePatterns = rootOptions.excludePatterns || [];
+                            rootExcludePatterns.push(excludePattern);
+                            rootOptions.excludePatterns = rootExcludePatterns;
+                        }
+                    }
+                }
+            }
+        }
+        if (typeof maxResults === 'number') {
+            opts.limit = maxResults;
+        }
+        const uriStrs = await this.fileSearchService.find('', opts);
+        return uriStrs.map(uriStr => Uri.parse(uriStr));
+    }
+
+    async $findTextInFiles(query: theia.TextSearchQuery, options: theia.FindTextInFilesOptions, searchRequestId: number,
+        token: theia.CancellationToken = CancellationToken.None): Promise<theia.TextSearchComplete> {
+        const maxHits = options.maxResults ? options.maxResults : 150;
+        const excludes = options.exclude ? (typeof options.exclude === 'string' ? options.exclude : (<theia.RelativePattern>options.exclude).pattern) : undefined;
+        const includes = options.include ? (typeof options.include === 'string' ? options.include : (<theia.RelativePattern>options.include).pattern) : undefined;
+        let canceledRequest = false;
+        return new Promise(resolve => {
+            let matches = 0;
+            const what: string = query.pattern;
+            const rootUris = this.roots.map(r => r.uri);
+            this.searchInWorkspaceService.searchWithCallback(what, rootUris, {
+                onResult: (searchId, result) => {
+                    if (canceledRequest) {
+                        return;
+                    }
+                    const hasSearch = this.workspaceSearch.has(searchId);
+                    if (!hasSearch) {
+                        this.workspaceSearch.add(searchId);
+                        token.onCancellationRequested(() => {
+                            this.searchInWorkspaceService.cancel(searchId);
+                            canceledRequest = true;
+                        });
+                    }
+                    if (token.isCancellationRequested) {
+                        this.searchInWorkspaceService.cancel(searchId);
+                        canceledRequest = true;
+                        return;
+                    }
+                    if (result && result.matches && result.matches.length) {
+                        while ((matches + result.matches.length) > maxHits) {
+                            result.matches.splice(result.matches.length - 1, 1);
+                        }
+                        this.proxy.$onTextSearchResult(searchRequestId, false, result);
+                        matches += result.matches.length;
+                        if (maxHits <= matches) {
+                            this.searchInWorkspaceService.cancel(searchId);
+                        }
+                    }
+                },
+                onDone: (searchId, _error) => {
+                    const hasSearch = this.workspaceSearch.has(searchId);
+                    if (hasSearch) {
+                        this.searchInWorkspaceService.cancel(searchId);
+                        this.workspaceSearch.delete(searchId);
+                    }
+                    this.proxy.$onTextSearchResult(searchRequestId, true);
+                    if (maxHits <= matches) {
+                        resolve({ limitHit: true });
+                    } else {
+                        resolve({ limitHit: false });
+                    }
+                }
+            }, {
+                useRegExp: query.isRegExp,
+                matchCase: query.isCaseSensitive,
+                matchWholeWord: query.isWordMatch,
+                exclude: excludes ? [excludes] : undefined,
+                include: includes ? [includes] : undefined,
+                maxResults: maxHits
             });
-            return Promise.resolve(uris);
         });
     }
 
+    async $registerFileSystemWatcher(options: FileWatcherSubscriberOptions): Promise<string> {
+        const handle = this.inPluginFileSystemWatcherManager.registerFileWatchSubscription(options, this.proxy);
+        this.toDispose.push(Disposable.create(() => this.inPluginFileSystemWatcherManager.unregisterFileWatchSubscription(handle)));
+        return handle;
+    }
+
+    $unregisterFileSystemWatcher(watcherId: string): Promise<void> {
+        this.inPluginFileSystemWatcherManager.unregisterFileWatchSubscription(watcherId);
+        return Promise.resolve();
+    }
+
     async $registerTextDocumentContentProvider(scheme: string): Promise<void> {
-        return this.resourceResolver.registerContentProvider(scheme, this.proxy);
+        this.resourceResolver.registerContentProvider(scheme, this.proxy);
+        this.toDispose.push(Disposable.create(() => this.resourceResolver.unregisterContentProvider(scheme)));
     }
 
     $unregisterTextDocumentContentProvider(scheme: string): void {
@@ -172,6 +318,10 @@ export class WorkspaceMainImpl implements WorkspaceMain {
 
     $onTextDocumentContentChange(uri: string, content: string): void {
         this.resourceResolver.onContentChange(uri, content);
+    }
+
+    async $updateWorkspaceFolders(start: number, deleteCount?: number, ...rootsToAdd: string[]): Promise<void> {
+        await this.workspaceService.spliceRoots(start, deleteCount, ...rootsToAdd.map(root => new URI(root)));
     }
 
 }
@@ -206,7 +356,7 @@ export class TextContentResourceResolver implements ResourceResolver {
         throw new Error(`Unable to find Text Content Resource Provider for scheme '${uri.scheme}'`);
     }
 
-    async registerContentProvider(scheme: string, proxy: WorkspaceExt): Promise<void> {
+    registerContentProvider(scheme: string, proxy: WorkspaceExt): void {
         if (this.providers.has(scheme)) {
             throw new Error(`Text Content Resource Provider for scheme '${scheme}' is already registered`);
         }
@@ -220,7 +370,7 @@ export class TextContentResourceResolver implements ResourceResolver {
                 }
 
                 resource = new TextContentResource(uri, proxy, {
-                    dispose() {
+                    dispose(): void {
                         instance.resources.delete(uri.toString());
                     }
                 });
@@ -248,8 +398,8 @@ export class TextContentResourceResolver implements ResourceResolver {
 
 export class TextContentResource implements Resource {
 
-    private onDidChangeContentsEmmiter: Emitter<void> = new Emitter<void>();
-    readonly onDidChangeContents: Event<void> = this.onDidChangeContentsEmmiter.event;
+    private onDidChangeContentsEmitter: Emitter<void> = new Emitter<void>();
+    readonly onDidChangeContents: Event<void> = this.onDidChangeContentsEmitter.event;
 
     // cached content
     cache: string | undefined;
@@ -269,16 +419,16 @@ export class TextContentResource implements Resource {
             }
         }
 
-        return Promise.reject(`Unable to get content for '${this.uri.toString()}'`);
+        return Promise.reject(new Error(`Unable to get content for '${this.uri.toString()}'`));
     }
 
-    dispose() {
+    dispose(): void {
         this.disposable.dispose();
     }
 
-    setContent(content: string) {
+    setContent(content: string): void {
         this.cache = content;
-        this.onDidChangeContentsEmmiter.fire(undefined);
+        this.onDidChangeContentsEmitter.fire(undefined);
     }
 
 }

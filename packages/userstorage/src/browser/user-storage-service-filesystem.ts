@@ -18,11 +18,10 @@ import { DisposableCollection, ILogger, Emitter, Event } from '@theia/core/lib/c
 import { UserStorageChangeEvent, UserStorageService } from './user-storage-service';
 import { injectable, inject } from 'inversify';
 import { FileSystemWatcher, FileChangeEvent } from '@theia/filesystem/lib/browser/filesystem-watcher';
+import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import { FileSystem } from '@theia/filesystem/lib/common';
 import URI from '@theia/core/lib/common/uri';
 import { UserStorageUri } from './user-storage-uri';
-
-export const THEIA_USER_STORAGE_FOLDER = '.theia';
 
 @injectable()
 export class UserStorageServiceFilesystemImpl implements UserStorageService {
@@ -34,18 +33,17 @@ export class UserStorageServiceFilesystemImpl implements UserStorageService {
     constructor(
         @inject(FileSystem) protected readonly fileSystem: FileSystem,
         @inject(FileSystemWatcher) protected readonly watcher: FileSystemWatcher,
-        @inject(ILogger) protected readonly logger: ILogger
+        @inject(ILogger) protected readonly logger: ILogger,
+        @inject(EnvVariablesServer) protected readonly envServer: EnvVariablesServer
 
     ) {
-        this.userStorageFolder = this.fileSystem.getCurrentUserHome().then(home => {
-            if (home) {
-                const userStorageFolderUri = new URI(home.uri).resolve(THEIA_USER_STORAGE_FOLDER);
-                watcher.watchFileChanges(userStorageFolderUri).then(disposable =>
-                    this.toDispose.push(disposable)
-                );
-                this.toDispose.push(this.watcher.onFilesChanged(changes => this.onDidFilesChanged(changes)));
-                return new URI(home.uri).resolve(THEIA_USER_STORAGE_FOLDER);
-            }
+        this.userStorageFolder = this.envServer.getConfigDirUri().then(configDirUri => {
+            const userDataFolderUri = new URI(configDirUri);
+            watcher.watchFileChanges(userDataFolderUri).then(disposable =>
+                this.toDispose.push(disposable)
+            );
+            this.toDispose.push(this.watcher.onFilesChanged(changes => this.onDidFilesChanged(changes)));
+            return userDataFolderUri;
         });
 
         this.toDispose.push(this.onUserStorageChangedEmitter);
@@ -61,8 +59,8 @@ export class UserStorageServiceFilesystemImpl implements UserStorageService {
         this.userStorageFolder.then(folder => {
             if (folder) {
                 for (const change of event) {
-                    if (folder.isEqualOrParent(change.uri)) {
-                        const userStorageUri = UserStorageServiceFilesystemImpl.toUserStorageUri(folder, change.uri);
+                    const userStorageUri = UserStorageServiceFilesystemImpl.toUserStorageUri(folder, change.uri);
+                    if (userStorageUri) {
                         uris.push(userStorageUri);
                     }
                 }
@@ -110,20 +108,12 @@ export class UserStorageServiceFilesystemImpl implements UserStorageService {
      * @param userStorageFolderUri User storage folder URI
      * @param fsPath The filesystem URI
      */
-    public static toUserStorageUri(userStorageFolderUri: URI, rawUri: URI): URI {
-        const userStorageRelativePath = this.getRelativeUserStoragePath(userStorageFolderUri, rawUri);
-        return new URI('').withScheme(UserStorageUri.SCHEME).withPath(userStorageRelativePath).withFragment(rawUri.fragment).withQuery(rawUri.query);
-    }
-
-    /**
-     * Returns the path relative to the user storage filesystem uri i.e if the user storage root is
-     * 'file://home/user/.theia' and the fileUri is 'file://home/user.theia/keymaps.json' it will return 'keymaps.json'
-     * @param userStorageFolderUri User storage folder URI
-     * @param fileUri User storage
-     */
-    private static getRelativeUserStoragePath(userStorageFolderUri: URI, fileUri: URI): string {
-        /* + 1 so that it removes the beginning slash  i.e return keymaps.json and not /keymaps.json */
-        return fileUri.toString().slice(userStorageFolderUri.toString().length + 1);
+    public static toUserStorageUri(userStorageFolderUri: URI, rawUri: URI): URI | undefined {
+        const relativePath = userStorageFolderUri.relative(rawUri);
+        if (relativePath) {
+            return rawUri.withScheme(UserStorageUri.SCHEME).withPath('/' + relativePath);
+        }
+        return undefined;
     }
 
     /**
@@ -132,6 +122,6 @@ export class UserStorageServiceFilesystemImpl implements UserStorageService {
      * @param userStorageUri User storage URI to be converted in filesystem URI
      */
     public static toFilesystemURI(userStorageFolderUri: URI, userStorageUri: URI): URI {
-        return userStorageFolderUri.withPath(userStorageFolderUri.path.join(userStorageUri.path.toString()));
+        return userStorageFolderUri.resolve(userStorageUri.path).normalizePath();
     }
 }

@@ -21,6 +21,42 @@ const expect = chai.expect;
 
 describe('uri', () => {
 
+    describe('#getAllLocations', () => {
+
+        it('of /foo/bar/file.txt', () => {
+            expect(new URI('/foo/bar/file.txt').allLocations.map(x => x.toString()))
+                .deep.equals([
+                    new URI('/foo/bar/file.txt').toString(),
+                    new URI('/foo/bar').toString(),
+                    new URI('/foo').toString(),
+                    new URI('/').toString()
+                ]);
+        });
+
+        it('of foo', () => {
+            expect(new URI('foo').allLocations.map(x => x.toString()))
+                .deep.equals([
+                    new URI('foo').toString(),
+                    new URI('/').toString()
+                ]);
+        });
+
+        it('of foo:bar.txt', () => {
+            expect(new URI().withScheme('foo').withPath('bar.txt').allLocations.map(x => x.toString()))
+                .deep.equals([
+                    'foo:bar.txt'
+                ]);
+        });
+
+        it('of foo:bar/foobar.txt', () => {
+            expect(new URI().withScheme('foo').withPath('bar/foobar.txt').allLocations.map(x => x.toString()))
+                .deep.equals([
+                    new URI().withScheme('foo').withPath('bar/foobar.txt').toString(),
+                    new URI().withScheme('foo').withPath('bar').toString()
+                ]);
+        });
+    });
+
     describe('#getParent', () => {
 
         it('of file:///foo/bar.txt', () => {
@@ -134,8 +170,6 @@ describe('uri', () => {
             const uri = new URI('').withScheme('file').withPath('/foo/bar.txt').withQuery('x=12').withFragment('baz');
             expect(uri.toString(true)).equals('file:///foo/bar.txt?x=12#baz');
 
-            expect(uri.withoutScheme().toString(true)).equals('/foo/bar.txt?x=12#baz');
-
             expect(uri.withScheme('http').toString(true)).equals('http:/foo/bar.txt?x=12#baz');
 
             expect(uri.withoutQuery().toString(true)).equals('file:///foo/bar.txt#baz');
@@ -143,6 +177,14 @@ describe('uri', () => {
             expect(uri.withoutFragment().toString(true)).equals(uri.withFragment('').toString(true));
 
             expect(uri.withPath('hubba-bubba').toString(true)).equals('file:///hubba-bubba?x=12#baz');
+        });
+    });
+
+    describe('#relative()', () => {
+        it('drive letters should be in lowercase', () => {
+            const uri = new URI('file:///C:/projects/theia');
+            const path = uri.relative(new URI(uri.resolve('node_modules/typescript/lib').toString()));
+            expect(String(path)).equals('node_modules/typescript/lib');
         });
     });
 });

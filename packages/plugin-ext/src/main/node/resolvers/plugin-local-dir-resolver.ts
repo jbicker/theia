@@ -14,6 +14,8 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { PluginDeployerResolver, PluginDeployerResolverContext } from '../../../common/plugin-protocol';
 import { injectable } from 'inversify';
 import * as fs from 'fs';
@@ -22,6 +24,8 @@ import * as path from 'path';
 @injectable()
 export class LocalDirectoryPluginDeployerResolver implements PluginDeployerResolver {
 
+    static LOCAL_DIR = 'local-dir';
+
     /**
      * Check all files/folder from the local-dir referenced and add them as plugins.
      */
@@ -29,15 +33,19 @@ export class LocalDirectoryPluginDeployerResolver implements PluginDeployerResol
 
         // get directory
         const localDirSetting = pluginResolverContext.getOriginId();
-        if (!localDirSetting.startsWith('local-dir')) {
+        if (!localDirSetting.startsWith(LocalDirectoryPluginDeployerResolver.LOCAL_DIR)) {
             return;
         }
         // remove prefix
-        const dirPath = localDirSetting.substring('local-dir'.length + 1);
+        let dirPath = localDirSetting.substring(LocalDirectoryPluginDeployerResolver.LOCAL_DIR.length + 1);
+        if (!path.isAbsolute(dirPath)) {
+            dirPath = path.resolve(process.cwd(), dirPath);
+        }
 
         // check directory exists
         if (!fs.existsSync(dirPath)) {
-            throw new Error('The directory referenced by ' + pluginResolverContext.getOriginId() + ' does not exist.');
+            console.warn(`The directory referenced by ${pluginResolverContext.getOriginId()} does not exist.`);
+            return;
 
         }
         // list all stuff from this directory
@@ -54,6 +62,6 @@ export class LocalDirectoryPluginDeployerResolver implements PluginDeployerResol
         return Promise.resolve();
     }
     accept(pluginId: string): boolean {
-        return pluginId.startsWith('local-dir');
+        return pluginId.startsWith(LocalDirectoryPluginDeployerResolver.LOCAL_DIR);
     }
 }

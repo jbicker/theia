@@ -14,8 +14,8 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { SelectionService } from '@theia/core/lib/common';
-import { Widget, BaseWidget, Message, Saveable, SaveableSource, Navigatable, StatefulWidget, DiffUris } from '@theia/core/lib/browser';
+import { Disposable, SelectionService, Event } from '@theia/core/lib/common';
+import { Widget, BaseWidget, Message, Saveable, SaveableSource, Navigatable, StatefulWidget } from '@theia/core/lib/browser';
 import URI from '@theia/core/lib/common/uri';
 import { TextEditor } from './editor';
 
@@ -26,10 +26,16 @@ export class EditorWidget extends BaseWidget implements SaveableSource, Navigata
         protected readonly selectionService: SelectionService
     ) {
         super(editor);
+        this.addClass('theia-editor');
         this.toDispose.push(this.editor);
         this.toDispose.push(this.editor.onSelectionChanged(() => {
             if (this.editor.isFocused()) {
                 this.selectionService.selection = this.editor;
+            }
+        }));
+        this.toDispose.push(Disposable.create(() => {
+            if (this.selectionService.selection === this.editor) {
+                this.selectionService.selection = undefined;
             }
         }));
     }
@@ -39,19 +45,10 @@ export class EditorWidget extends BaseWidget implements SaveableSource, Navigata
     }
 
     getResourceUri(): URI | undefined {
-        const { uri } = this.editor;
-        if (DiffUris.isDiffUri(uri)) {
-            return DiffUris.decode(uri)[0];
-        }
-        return uri;
+        return this.editor.getResourceUri();
     }
     createMoveToUri(resourceUri: URI): URI | undefined {
-        const { uri } = this.editor;
-        if (DiffUris.isDiffUri(uri)) {
-            const [left, right] = DiffUris.decode(uri);
-            return DiffUris.encode(left.withPath(resourceUri.path), right.withPath(resourceUri.path));
-        }
-        return uri.withPath(resourceUri.path);
+        return this.editor.createMoveToUri(resourceUri);
     }
 
     protected onActivateRequest(msg: Message): void {
@@ -86,6 +83,10 @@ export class EditorWidget extends BaseWidget implements SaveableSource, Navigata
 
     restoreState(oldState: object): void {
         this.editor.restoreViewState(oldState);
+    }
+
+    get onDispose(): Event<void> {
+        return this.toDispose.onDispose;
     }
 
 }

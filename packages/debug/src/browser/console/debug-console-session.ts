@@ -14,9 +14,9 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+import throttle = require('lodash.throttle');
 import { injectable, inject, postConstruct } from 'inversify';
 import { DebugProtocol } from 'vscode-debugprotocol/lib/debugProtocol';
-import { MessageType } from '@theia/core/lib/common';
 import { ConsoleSession, ConsoleItem } from '@theia/console/lib/browser/console-session';
 import { AnsiConsoleItem } from '@theia/console/lib/browser/ansi-console-item';
 import { DebugSession } from '../debug-session';
@@ -24,6 +24,7 @@ import { DebugSessionManager } from '../debug-session-manager';
 import { Languages, CompletionItem, CompletionItemKind, Position, Range, TextEdit, Workspace, TextDocument, CompletionParams } from '@theia/languages/lib/browser';
 import URI from '@theia/core/lib/common/uri';
 import { ExpressionContainer, ExpressionItem } from './debug-console-items';
+import { Severity } from '@theia/core/lib/common/severity';
 
 @injectable()
 export class DebugConsoleSession extends ConsoleSession {
@@ -32,6 +33,9 @@ export class DebugConsoleSession extends ConsoleSession {
 
     readonly id = 'debug';
     protected items: ConsoleItem[] = [];
+
+    // content buffer for [append](#append) method
+    protected uncompletedItemContent: string | undefined;
 
     @inject(DebugSessionManager)
     protected readonly manager: DebugSessionManager;
@@ -79,7 +83,7 @@ export class DebugConsoleSession extends ConsoleSession {
     }
 
     getElements(): IterableIterator<ConsoleItem> {
-        return this.items.values();
+        return this.items.filter(e => !this.severity || e.severity === this.severity)[Symbol.iterator]();
     }
 
     protected async completions({ textDocument: { uri }, position }: CompletionParams): Promise<CompletionItem[]> {
@@ -114,7 +118,7 @@ export class DebugConsoleSession extends ConsoleSession {
     }
 
     async execute(value: string): Promise<void> {
-        const expression = new ExpressionItem(value, this.manager.currentSession);
+        const expression = new ExpressionItem(value, () => this.manager.currentSession);
         this.items.push(expression);
         await expression.evaluate();
         this.fireDidChange();
@@ -125,6 +129,28 @@ export class DebugConsoleSession extends ConsoleSession {
         this.fireDidChange();
     }
 
+    append(value: string): void {
+        if (!value) {
+            return;
+        }
+
+        const lastItem = this.items.slice(-1)[0];
+        if (lastItem instanceof AnsiConsoleItem && lastItem.content === this.uncompletedItemContent) {
+            this.items.pop();
+            this.uncompletedItemContent += value;
+        } else {
+            this.uncompletedItemContent = value;
+        }
+
+        this.items.push(new AnsiConsoleItem(this.uncompletedItemContent, Severity.Info));
+        this.fireDidChange();
+    }
+
+    appendLine(value: string): void {
+        this.items.push(new AnsiConsoleItem(value, Severity.Info));
+        this.fireDidChange();
+    }
+
     protected async logOutput(session: DebugSession, event: DebugProtocol.OutputEvent): Promise<void> {
         const body = event.body;
         const { category, variablesReference } = body;
@@ -132,9 +158,9 @@ export class DebugConsoleSession extends ConsoleSession {
             console.debug(`telemetry/${event.body.output}`, event.body.data);
             return;
         }
-        const severity = category === 'stderr' ? MessageType.Error : event.body.category === 'console' ? MessageType.Warning : MessageType.Info;
+        const severity = category === 'stderr' ? Severity.Error : event.body.category === 'console' ? Severity.Warning : Severity.Info;
         if (variablesReference) {
-            const items = await new ExpressionContainer({ session, variablesReference }).getElements();
+            const items = await new ExpressionContainer({ session: () => session, variablesReference }).getElements();
             this.items.push(...items);
         } else if (typeof body.output === 'string') {
             for (const line of body.output.split('\n')) {
@@ -144,8 +170,6 @@ export class DebugConsoleSession extends ConsoleSession {
         this.fireDidChange();
     }
 
-    protected fireDidChange(): void {
-        this.onDidChangeEmitter.fire(undefined);
-    }
+    protected fireDidChange = throttle(() => super.fireDidChange(), 50);
 
 }

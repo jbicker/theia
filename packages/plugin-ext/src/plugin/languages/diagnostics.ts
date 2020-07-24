@@ -18,10 +18,11 @@ import * as theia from '@theia/plugin';
 import { Event, Emitter } from '@theia/core/lib/common/event';
 import { convertDiagnosticToMarkerData } from '../type-converters';
 import { DiagnosticSeverity, MarkerSeverity } from '../types-impl';
-import { MarkerData } from '../../api/model';
-import { RPCProtocol } from '../../api/rpc-protocol';
-import { PLUGIN_RPC_CONTEXT, LanguagesMain } from '../../api/plugin-api';
-import URI from 'vscode-uri';
+import { MarkerData } from '../../common/plugin-api-rpc-model';
+import { RPCProtocol } from '../../common/rpc-protocol';
+import { PLUGIN_RPC_CONTEXT, LanguagesMain } from '../../common/plugin-api-rpc';
+import { URI } from 'vscode-uri';
+import { v4 } from 'uuid';
 
 export class DiagnosticCollection implements theia.DiagnosticCollection {
     private static DIAGNOSTICS_PRIORITY = [
@@ -54,7 +55,7 @@ export class DiagnosticCollection implements theia.DiagnosticCollection {
 
     set(uri: theia.Uri, diagnostics: theia.Diagnostic[] | undefined): void;
     set(entries: [theia.Uri, theia.Diagnostic[] | undefined][]): void;
-    set(arg: theia.Uri | [theia.Uri, theia.Diagnostic[] | undefined][], diagnostics?: theia.Diagnostic[] | undefined) {
+    set(arg: theia.Uri | [theia.Uri, theia.Diagnostic[] | undefined][], diagnostics?: theia.Diagnostic[] | undefined): void {
         this.ensureNotDisposed();
 
         if (arg instanceof URI) {
@@ -114,7 +115,7 @@ export class DiagnosticCollection implements theia.DiagnosticCollection {
         if (this.has(uri)) {
             this.fireDiagnosticChangeEvent(uri);
             this.diagnostics.delete(uri.toString());
-            this.proxy.$changeDiagnostics(this.name, [[uri, []]]);
+            this.proxy.$changeDiagnostics(this.name, [[uri.toString(), []]]);
         }
     }
 
@@ -125,7 +126,7 @@ export class DiagnosticCollection implements theia.DiagnosticCollection {
         this.proxy.$clearDiagnostics(this.name);
     }
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     forEach(callback: (uri: URI, diagnostics: theia.Diagnostic[], collection: theia.DiagnosticCollection) => any, thisArg?: any): void {
         this.ensureNotDisposed();
         this.diagnostics.forEach((diagnostics, uriString) => {
@@ -154,7 +155,7 @@ export class DiagnosticCollection implements theia.DiagnosticCollection {
         }
     }
 
-    setOnDisposeCallback(onDisposeCallback: (() => void) | undefined) {
+    setOnDisposeCallback(onDisposeCallback: (() => void) | undefined): void {
         this.onDisposeCallback = onDisposeCallback;
     }
 
@@ -204,7 +205,7 @@ export class DiagnosticCollection implements theia.DiagnosticCollection {
     }
 
     private sendChangesToEditor(uris: URI[]): void {
-        const markers: [URI, MarkerData[]][] = [];
+        const markers: [string, MarkerData[]][] = [];
         nextUri:
         for (const uri of uris) {
             const uriMarkers: MarkerData[] = [];
@@ -224,7 +225,7 @@ export class DiagnosticCollection implements theia.DiagnosticCollection {
                                         endLineNumber: lastMarker.endLineNumber,
                                         endColumn: lastMarker.endColumn
                                     });
-                                    markers.push([uri, uriMarkers]);
+                                    markers.push([uri.toString(), uriMarkers]);
                                     continue nextUri;
                                 }
                             }
@@ -232,10 +233,10 @@ export class DiagnosticCollection implements theia.DiagnosticCollection {
                     }
                 } else {
                     uriDiagnostics.forEach(diagnostic => uriMarkers.push(convertDiagnosticToMarkerData(diagnostic)));
-                    markers.push([uri, uriMarkers]);
+                    markers.push([uri.toString(), uriMarkers]);
                 }
             } else {
-                markers.push([uri, []]);
+                markers.push([uri.toString(), []]);
             }
         }
 
@@ -248,8 +249,7 @@ export class Diagnostics {
     private static GENERATED_DIAGNOSTIC_COLLECTION_NAME_PREFIX = '_generated_diagnostic_collection_name_#';
 
     private proxy: LanguagesMain;
-    private diagnosticCollections: Map<string, DiagnosticCollection>; // id -> diagnostic colection
-    private nextId: number;
+    private diagnosticCollections: Map<string, DiagnosticCollection>; // id -> diagnostic collection
 
     private diagnosticsChangedEmitter = new Emitter<theia.DiagnosticChangeEvent>();
     public readonly onDidChangeDiagnostics: Event<theia.DiagnosticChangeEvent> = this.diagnosticsChangedEmitter.event;
@@ -258,14 +258,13 @@ export class Diagnostics {
         this.proxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.LANGUAGES_MAIN);
 
         this.diagnosticCollections = new Map<string, DiagnosticCollection>();
-        this.nextId = 0;
     }
 
     getDiagnostics(resource: theia.Uri): theia.Diagnostic[];
     getDiagnostics(): [theia.Uri, theia.Diagnostic[]][];
     getDiagnostics(resource?: URI): theia.Diagnostic[] | [URI, theia.Diagnostic[]][] {
         if (resource) {
-            return this.getAllDiagnisticsForResource(resource);
+            return this.getAllDiagnosticsForResource(resource);
         } else {
             return this.getAllDiagnostics();
         }
@@ -288,11 +287,11 @@ export class Diagnostics {
         return diagnosticCollection;
     }
 
-    private getNextId(): number {
-        return this.nextId++;
+    private getNextId(): string {
+        return v4();
     }
 
-    private getAllDiagnisticsForResource(uri: URI): theia.Diagnostic[] {
+    private getAllDiagnosticsForResource(uri: URI): theia.Diagnostic[] {
         let result: theia.Diagnostic[] = [];
         this.diagnosticCollections.forEach(diagnosticCollection => {
             const diagnostics = diagnosticCollection.get(uri);

@@ -21,8 +21,9 @@ import { ContextMenuRenderer } from '@theia/core/lib/browser';
 import { MonacoEditor } from '@theia/monaco/lib/browser/monaco-editor';
 import { DebugSessionManager } from '../debug-session-manager';
 import { DebugEditorModel, DebugEditorModelFactory } from './debug-editor-model';
-import { BreakpointManager } from '../breakpoint/breakpoint-manager';
-import { DebugBreakpoint } from '../model/debug-breakpoint';
+import { BreakpointManager, SourceBreakpointsChangeEvent } from '../breakpoint/breakpoint-manager';
+import { DebugSourceBreakpoint } from '../model/debug-source-breakpoint';
+import { DebugBreakpointWidget } from './debug-breakpoint-widget';
 
 @injectable()
 export class DebugEditorService {
@@ -53,6 +54,7 @@ export class DebugEditorService {
                 this.render(uri);
             }
         });
+        this.breakpoints.onDidChangeBreakpoints(event => this.closeBreakpointIfAffected(event));
     }
 
     protected push(widget: EditorWidget): void {
@@ -60,8 +62,8 @@ export class DebugEditorService {
         if (!(editor instanceof MonacoEditor)) {
             return;
         }
-        const uri = editor.getControl().getModel().uri.toString();
-        const debugModel = this.factory(editor.getControl());
+        const uri = editor.getControl().getModel()!.uri.toString();
+        const debugModel = this.factory(editor);
         this.models.set(uri, debugModel);
         editor.getControl().onDidDispose(() => {
             debugModel.dispose();
@@ -81,41 +83,123 @@ export class DebugEditorService {
         const uri = currentEditor && currentEditor.getResourceUri();
         return uri && this.models.get(uri.toString());
     }
-    get breakpoint(): DebugBreakpoint | undefined {
-        const { model } = this;
-        return model && model.breakpoint;
+
+    getLogpoint(position: monaco.Position): DebugSourceBreakpoint | undefined {
+        const logpoint = this.anyBreakpoint(position);
+        return logpoint && logpoint.logMessage ? logpoint : undefined;
     }
-    toggleBreakpoint(): void {
-        const { model } = this;
-        if (model) {
-            model.toggleBreakpoint();
-        }
+    getLogpointEnabled(position: monaco.Position): boolean | undefined {
+        const logpoint = this.getLogpoint(position);
+        return logpoint && logpoint.enabled;
     }
-    get breakpointEnabled(): boolean | undefined {
-        const { breakpoint } = this;
+
+    getBreakpoint(position: monaco.Position): DebugSourceBreakpoint | undefined {
+        const breakpoint = this.anyBreakpoint(position);
+        return breakpoint && breakpoint.logMessage ? undefined : breakpoint;
+    }
+    getBreakpointEnabled(position: monaco.Position): boolean | undefined {
+        const breakpoint = this.getBreakpoint(position);
         return breakpoint && breakpoint.enabled;
     }
-    setBreakpointEnabled(enabled: boolean): void {
-        const { breakpoint } = this;
+
+    anyBreakpoint(position?: monaco.Position): DebugSourceBreakpoint | undefined {
+        return this.model && this.model.getBreakpoint(position);
+    }
+
+    getInlineBreakpoint(position?: monaco.Position): DebugSourceBreakpoint | undefined {
+        return this.model && this.model.getInlineBreakpoint(position);
+    }
+
+    toggleBreakpoint(position?: monaco.Position): void {
+        const { model } = this;
+        if (model) {
+            model.toggleBreakpoint(position);
+        }
+    }
+    setBreakpointEnabled(position: monaco.Position, enabled: boolean): void {
+        const breakpoint = this.anyBreakpoint(position);
         if (breakpoint) {
             breakpoint.setEnabled(enabled);
+        }
+    }
+
+    addInlineBreakpoint(): void {
+        const { model } = this;
+        if (model) {
+            model.addInlineBreakpoint();
         }
     }
 
     showHover(): void {
         const { model } = this;
         if (model) {
-            const selection = model.editor.getSelection();
+            const selection = model.editor.getControl().getSelection()!;
             model.hover.show({ selection, focus: true });
         }
     }
     canShowHover(): boolean {
         const { model } = this;
         if (model) {
-            const selection = model.editor.getSelection();
-            return !!model.editor.getModel().getWordAtPosition(selection.getStartPosition());
+            const selection = model.editor.getControl().getSelection()!;
+            return !!model.editor.getControl().getModel()!.getWordAtPosition(selection.getStartPosition());
         }
         return false;
+    }
+
+    addBreakpoint(context: DebugBreakpointWidget.Context, position?: monaco.Position): void {
+        const { model } = this;
+        if (model) {
+            position = position || model.position;
+            const breakpoint = model.getBreakpoint(position);
+            if (breakpoint) {
+                model.breakpointWidget.show({ breakpoint, context });
+            } else {
+                model.breakpointWidget.show({
+                    position,
+                    context
+                });
+            }
+        }
+    }
+    async editBreakpoint(breakpointOrPosition?: DebugSourceBreakpoint | monaco.Position): Promise<void> {
+        if (breakpointOrPosition instanceof monaco.Position) {
+            breakpointOrPosition = this.anyBreakpoint(breakpointOrPosition);
+        }
+
+        if (breakpointOrPosition) {
+            await breakpointOrPosition.open();
+            const model = this.models.get(breakpointOrPosition.uri.toString());
+            if (model) {
+                model.breakpointWidget.show(breakpointOrPosition);
+            }
+        }
+    }
+    closeBreakpoint(): void {
+        const { model } = this;
+        if (model) {
+            model.breakpointWidget.hide();
+        }
+    }
+    acceptBreakpoint(): void {
+        const { model } = this;
+        if (model) {
+            model.acceptBreakpoint();
+        }
+    }
+    protected closeBreakpointIfAffected({ uri, removed }: SourceBreakpointsChangeEvent): void {
+        const model = this.models.get(uri.toString());
+        if (!model) {
+            return;
+        }
+        const position = model.breakpointWidget.position;
+        if (!position) {
+            return;
+        }
+        for (const breakpoint of removed) {
+            if (breakpoint.raw.line === position.lineNumber) {
+                model.breakpointWidget.hide();
+            }
+        }
     }
 
 }

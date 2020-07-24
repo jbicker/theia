@@ -15,7 +15,12 @@
  ********************************************************************************/
 
 import { injectable, inject, postConstruct } from 'inversify';
-import { SearchInWorkspaceServer, SearchInWorkspaceClient, SearchInWorkspaceResult, SearchInWorkspaceOptions } from '../common/search-in-workspace-interface';
+import {
+    SearchInWorkspaceServer,
+    SearchInWorkspaceClient,
+    SearchInWorkspaceResult,
+    SearchInWorkspaceOptions
+} from '../common/search-in-workspace-interface';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { ILogger } from '@theia/core';
 
@@ -36,7 +41,7 @@ export class SearchInWorkspaceClientImpl implements SearchInWorkspaceClient {
         this.service.onDone(searchId, error);
     }
 
-    setService(service: SearchInWorkspaceClient) {
+    setService(service: SearchInWorkspaceClient): void {
         this.service = service;
     }
 }
@@ -46,7 +51,6 @@ export type SearchInWorkspaceCallbacks = SearchInWorkspaceClient;
 /**
  * Service to search text in the workspace files.
  */
-
 @injectable()
 export class SearchInWorkspaceService implements SearchInWorkspaceClient {
 
@@ -70,7 +74,7 @@ export class SearchInWorkspaceService implements SearchInWorkspaceClient {
     @inject(ILogger) protected readonly logger: ILogger;
 
     @postConstruct()
-    protected init() {
+    protected init(): void {
         this.client.setService(this);
     }
 
@@ -105,13 +109,16 @@ export class SearchInWorkspaceService implements SearchInWorkspaceClient {
 
     // Start a search of the string "what" in the workspace.
     async search(what: string, callbacks: SearchInWorkspaceCallbacks, opts?: SearchInWorkspaceOptions): Promise<number> {
-        const root = (await this.workspaceService.roots)[0];
-
-        if (!root) {
+        if (!this.workspaceService.open) {
             throw new Error('Search failed: no workspace root.');
         }
 
-        const searchId = await this.searchServer.search(what, root.uri, opts);
+        const roots = await this.workspaceService.roots;
+        return this.doSearch(what, roots.map(r => r.uri), callbacks, opts);
+    }
+
+    protected async doSearch(what: string, rootsUris: string[], callbacks: SearchInWorkspaceCallbacks, opts?: SearchInWorkspaceOptions): Promise<number> {
+        const searchId = await this.searchServer.search(what, rootsUris, opts);
         this.pendingSearches.set(searchId, callbacks);
         this.lastKnownSearchId = searchId;
 
@@ -133,8 +140,12 @@ export class SearchInWorkspaceService implements SearchInWorkspaceClient {
         return searchId;
     }
 
+    async searchWithCallback(what: string, rootsUris: string[], callbacks: SearchInWorkspaceClient, opts?: SearchInWorkspaceOptions | undefined): Promise<number> {
+        return this.doSearch(what, rootsUris, callbacks, opts);
+    }
+
     // Cancel an ongoing search.
-    cancel(searchId: number) {
+    cancel(searchId: number): void {
         this.pendingSearches.delete(searchId);
         this.searchServer.cancel(searchId);
     }

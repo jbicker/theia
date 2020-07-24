@@ -13,18 +13,28 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
+// copied from https://github.com/microsoft/vscode/blob/1.37.0/src/vs/workbench/api/common/extHostTypes.ts
+/*---------------------------------------------------------------------------------------------
+*  Copyright (c) Microsoft Corporation. All rights reserved.
+*  Licensed under the MIT License. See License.txt in the project root for license information.
+*--------------------------------------------------------------------------------------------*/
 
+/* eslint-disable no-null/no-null */
+
+import { UUID } from '@phosphor/coreutils/lib/uuid';
 import { illegalArgument } from '../common/errors';
 import * as theia from '@theia/plugin';
-import URI from 'vscode-uri';
+import * as crypto from 'crypto';
+import { URI } from 'vscode-uri';
 import { relative } from '../common/paths-util';
-import { startsWithIgnoreCase } from '../common/strings';
+import { startsWithIgnoreCase } from '@theia/languages/lib/common/language-selector/strings';
 import { MarkdownString, isMarkdownString } from './markdown-string';
+import { SymbolKind } from '../common/plugin-api-rpc-model';
 
 export class Disposable {
     private disposable: undefined | (() => void);
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     static from(...disposables: { dispose(): any }[]): Disposable {
         return new Disposable(() => {
             if (disposables) {
@@ -72,9 +82,16 @@ export enum TextEditorLineNumbersStyle {
  */
 export enum ViewColumn {
     Active = -1,
+    Beside = -2,
     One = 1,
     Two = 2,
-    Three = 3
+    Three = 3,
+    Four = 4,
+    Five = 5,
+    Six = 6,
+    Seven = 7,
+    Eight = 8,
+    Nine = 9
 }
 
 /**
@@ -89,7 +106,7 @@ export enum TextEditorSelectionChangeKind {
 }
 
 export namespace TextEditorSelectionChangeKind {
-    export function fromValue(s: string | undefined) {
+    export function fromValue(s: string | undefined): TextEditorSelectionChangeKind | undefined {
         switch (s) {
             case 'keyboard': return TextEditorSelectionChangeKind.Keyboard;
             case 'mouse': return TextEditorSelectionChangeKind.Mouse;
@@ -373,7 +390,8 @@ export class Range {
         return new Range(start, end);
     }
 
-    static isRange(thing: {}): thing is theia.Range {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    static isRange(thing: any): thing is theia.Range {
         if (thing instanceof Range) {
             return true;
         }
@@ -519,9 +537,9 @@ export class ThemeColor {
 
 export class ThemeIcon {
 
-    static readonly File: ThemeIcon;
+    static readonly File: ThemeIcon = new ThemeIcon('file');
 
-    static readonly Folder: ThemeIcon;
+    static readonly Folder: ThemeIcon = new ThemeIcon('folder');
 
     private constructor(public id: string) {
     }
@@ -568,8 +586,11 @@ export enum OverviewRulerLane {
 }
 
 export enum ConfigurationTarget {
-    User = 0,
-    Workspace = 1
+    Global = 1,
+    Workspace,
+    WorkspaceFolder,
+    Default,
+    Memory
 }
 
 export class RelativePattern {
@@ -653,7 +674,7 @@ export class TextEdit {
         if (!thing) {
             return false;
         }
-        return Range.isRange((<TextEdit>thing))
+        return Range.isRange((<TextEdit>thing).range)
             && typeof (<TextEdit>thing).newText === 'string';
     }
 
@@ -698,7 +719,7 @@ export enum CompletionItemKind {
     Enum = 12,
     Keyword = 13,
     Snippet = 14,
-    Color = 15,
+    Color = 15, // eslint-disable-line no-shadow
     File = 16,
     Reference = 17,
     Folder = 18,
@@ -764,13 +785,24 @@ export class Location {
     uri: URI;
     range: Range;
 
-    constructor(uri: URI, rangeOrPosition: Range | Position) {
+    constructor(uri: URI, rangeOrPosition: Range | Position | undefined) {
         this.uri = uri;
         if (rangeOrPosition instanceof Range) {
             this.range = rangeOrPosition;
         } else if (rangeOrPosition instanceof Position) {
             this.range = new Range(rangeOrPosition, rangeOrPosition);
         }
+    }
+
+    static isLocation(thing: {}): thing is theia.Location {
+        if (thing instanceof Location) {
+            return true;
+        }
+        if (!thing) {
+            return false;
+        }
+        return Range.isRange((<Location>thing).range)
+            && URI.isUri((<Location>thing).uri);
     }
 }
 
@@ -806,10 +838,10 @@ export enum MarkerTag {
 }
 
 export class ParameterInformation {
-    label: string;
+    label: string | [number, number];
     documentation?: string | MarkdownString;
 
-    constructor(label: string, documentation?: string | MarkdownString) {
+    constructor(label: string | [number, number], documentation?: string | MarkdownString) {
         this.label = label;
         this.documentation = documentation;
     }
@@ -823,13 +855,24 @@ export class SignatureInformation {
     constructor(label: string, documentation?: string | MarkdownString) {
         this.label = label;
         this.documentation = documentation;
+        this.parameters = [];
     }
+}
+
+export enum SignatureHelpTriggerKind {
+    Invoke = 1,
+    TriggerCharacter = 2,
+    ContentChange = 3,
 }
 
 export class SignatureHelp {
     signatures: SignatureInformation[];
     activeSignature: number;
     activeParameter: number;
+
+    constructor() {
+        this.signatures = [];
+    }
 }
 
 export class Hover {
@@ -852,6 +895,26 @@ export class Hover {
             this.contents = [contents];
         }
         this.range = range;
+    }
+}
+
+export enum DocumentHighlightKind {
+    Text = 0,
+    Read = 1,
+    Write = 2
+}
+
+export class DocumentHighlight {
+
+    public range: Range;
+    public kind?: DocumentHighlightKind;
+
+    constructor(
+        range: Range,
+        kind?: DocumentHighlightKind
+    ) {
+        this.range = range;
+        this.kind = kind;
     }
 }
 
@@ -905,6 +968,7 @@ export class CodeActionKind {
     public static readonly RefactorRewrite = CodeActionKind.Refactor.append('rewrite');
     public static readonly Source = CodeActionKind.Empty.append('source');
     public static readonly SourceOrganizeImports = CodeActionKind.Source.append('organizeImports');
+    public static readonly SourceFixAll = CodeActionKind.Source.append('fixAll');
 
     constructor(
         public readonly value: string
@@ -916,6 +980,10 @@ export class CodeActionKind {
 
     public contains(other: CodeActionKind): boolean {
         return this.value === other.value || startsWithIgnoreCase(other.value, this.value + CodeActionKind.sep);
+    }
+
+    public intersects(other: CodeActionKind): boolean {
+        return this.contains(other) || other.contains(this);
     }
 }
 
@@ -1067,6 +1135,7 @@ export class WorkspaceEdit implements theia.WorkspaceEdit {
         return this.entries().length;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     toJSON(): any {
         return this.entries();
     }
@@ -1074,7 +1143,7 @@ export class WorkspaceEdit implements theia.WorkspaceEdit {
 
 export class TreeItem {
 
-    label?: string;
+    label?: string | theia.TreeItemLabel;
 
     id?: string;
 
@@ -1086,10 +1155,17 @@ export class TreeItem {
 
     command?: theia.Command;
 
-    collapsibleState?: TreeItemCollapsibleState;
-
     contextValue?: string;
 
+    constructor(label: string | theia.TreeItemLabel, collapsibleState?: theia.TreeItemCollapsibleState)
+    constructor(resourceUri: URI, collapsibleState?: theia.TreeItemCollapsibleState)
+    constructor(arg1: string | theia.TreeItemLabel | URI, public collapsibleState: theia.TreeItemCollapsibleState = TreeItemCollapsibleState.None) {
+        if (arg1 instanceof URI) {
+            this.resourceUri = arg1;
+        } else {
+            this.label = arg1;
+        }
+    }
 }
 
 export enum TreeItemCollapsibleState {
@@ -1098,33 +1174,8 @@ export enum TreeItemCollapsibleState {
     Expanded = 2
 }
 
-export enum SymbolKind {
-    File = 0,
-    Module = 1,
-    Namespace = 2,
-    Package = 3,
-    Class = 4,
-    Method = 5,
-    Property = 6,
-    Field = 7,
-    Constructor = 8,
-    Enum = 9,
-    Interface = 10,
-    Function = 11,
-    Variable = 12,
-    Constant = 13,
-    String = 14,
-    Number = 15,
-    Boolean = 16,
-    Array = 17,
-    Object = 18,
-    Key = 19,
-    Null = 20,
-    EnumMember = 21,
-    Struct = 22,
-    Event = 23,
-    Operator = 24,
-    TypeParameter = 25
+export enum SymbolTag {
+    Deprecated = 1
 }
 
 export class SymbolInformation {
@@ -1138,6 +1189,7 @@ export class SymbolInformation {
     name: string;
     location: Location;
     kind: SymbolKind;
+    tags?: SymbolTag[];
     containerName: undefined | string;
     constructor(name: string, kind: SymbolKind, containerName: string, location: Location);
     constructor(name: string, kind: SymbolKind, range: Range, uri?: URI, containerName?: string);
@@ -1159,7 +1211,7 @@ export class SymbolInformation {
         SymbolInformation.validate(this);
     }
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     toJSON(): any {
         return {
             name: this.name,
@@ -1187,6 +1239,7 @@ export class DocumentSymbol {
     name: string;
     detail: string;
     kind: SymbolKind;
+    tags?: SymbolTag[];
     range: Range;
     selectionRange: Range;
     children: DocumentSymbol[];
@@ -1204,14 +1257,873 @@ export class DocumentSymbol {
 }
 
 export enum FileChangeType {
-	Changed = 1,
-	Created = 2,
-	Deleted = 3,
+    Changed = 1,
+    Created = 2,
+    Deleted = 3,
+}
+
+export enum CommentThreadCollapsibleState {
+    Collapsed = 0,
+    Expanded = 1
+}
+
+export interface QuickInputButton {
+    readonly iconPath: URI | { light: string | URI; dark: string | URI } | ThemeIcon;
+    readonly tooltip?: string | undefined;
+}
+
+export class QuickInputButtons {
+    static readonly Back: QuickInputButton = {
+        iconPath: {
+            id: 'Back'
+        },
+        tooltip: 'Back'
+    };
+}
+
+export enum CommentMode {
+    Editing = 0,
+    Preview = 1
+}
+
+export class FileSystemError extends Error {
+
+    static FileExists(messageOrUri?: string | URI): FileSystemError {
+        return new FileSystemError(messageOrUri, 'EntryExists', FileSystemError.FileExists);
+    }
+    static FileNotFound(messageOrUri?: string | URI): FileSystemError {
+        return new FileSystemError(messageOrUri, 'EntryNotFound', FileSystemError.FileNotFound);
+    }
+    static FileNotADirectory(messageOrUri?: string | URI): FileSystemError {
+        return new FileSystemError(messageOrUri, 'EntryNotADirectory', FileSystemError.FileNotADirectory);
+    }
+    static FileIsADirectory(messageOrUri?: string | URI): FileSystemError {
+        return new FileSystemError(messageOrUri, 'EntryIsADirectory', FileSystemError.FileIsADirectory);
+    }
+    static NoPermissions(messageOrUri?: string | URI): FileSystemError {
+        return new FileSystemError(messageOrUri, 'NoPermissions', FileSystemError.NoPermissions);
+    }
+    static Unavailable(messageOrUri?: string | URI): FileSystemError {
+        return new FileSystemError(messageOrUri, 'Unavailable', FileSystemError.Unavailable);
+    }
+
+    constructor(uriOrMessage?: string | URI, code?: string, terminator?: Function) {
+        super(URI.isUri(uriOrMessage) ? uriOrMessage.toString(true) : uriOrMessage);
+        this.name = code ? `${code} (FileSystemError)` : 'FileSystemError';
+
+        if (typeof Object.setPrototypeOf === 'function') {
+            Object.setPrototypeOf(this, FileSystemError.prototype);
+        }
+
+        if (typeof Error.captureStackTrace === 'function' && typeof terminator === 'function') {
+            Error.captureStackTrace(this, terminator);
+        }
+    }
 }
 
 export enum FileType {
-	Unknown = 0,
-	File = 1,
-	Directory = 2,
-	SymbolicLink = 64
+    Unknown = 0,
+    File = 1,
+    Directory = 2,
+    SymbolicLink = 64
+}
+
+export interface FileStat {
+    readonly type: FileType;
+    readonly ctime: number;
+    readonly mtime: number;
+    readonly size: number;
+}
+
+export class ProgressOptions {
+    /**
+     * The location at which progress should show.
+     */
+    location: ProgressLocation;
+    /**
+     * A human-readable string which will be used to describe the
+     * operation.
+     */
+    title?: string;
+    /**
+     * Controls if a cancel button should show to allow the user to
+     * cancel the long running operation.  Note that currently only
+     * `ProgressLocation.Notification` is supporting to show a cancel
+     * button.
+     */
+    cancellable?: boolean;
+    constructor(location: ProgressLocation, title?: string, cancellable?: boolean) {
+        this.location = location;
+    }
+}
+export class Progress<T> {
+    /**
+     * Report a progress update.
+     * @param value A progress item, like a message and/or an
+     * report on how much work finished
+     */
+    report(value: T): void {
+    }
+}
+export enum ProgressLocation {
+    /**
+     * Show progress for the source control viewlet, as overlay for the icon and as progress bar
+     * inside the viewlet (when visible). Neither supports cancellation nor discrete progress.
+     */
+    SourceControl = 1,
+    /**
+     * Show progress in the status bar of the editor. Neither supports cancellation nor discrete progress.
+     */
+    Window = 10,
+    /**
+     * Show progress as notification with an optional cancel button. Supports to show infinite and discrete progress.
+     */
+    Notification = 15
+}
+
+export class ProcessExecution {
+    private executionProcess: string;
+    private arguments: string[];
+    private executionOptions: theia.ProcessExecutionOptions | undefined;
+
+    constructor(process: string, options?: theia.ProcessExecutionOptions);
+    constructor(process: string, args: string[], options?: theia.ProcessExecutionOptions);
+    constructor(process: string, varg1?: string[] | theia.ProcessExecutionOptions, varg2?: theia.ProcessExecutionOptions) {
+        if (typeof process !== 'string') {
+            throw illegalArgument('process');
+        }
+        this.executionProcess = process;
+        if (varg1 !== undefined) {
+            if (Array.isArray(varg1)) {
+                this.arguments = varg1;
+                this.executionOptions = varg2;
+            } else {
+                this.executionOptions = varg1;
+            }
+        }
+        if (this.arguments === undefined) {
+            this.arguments = [];
+        }
+    }
+
+    get process(): string {
+        return this.executionProcess;
+    }
+
+    set process(value: string) {
+        if (typeof value !== 'string') {
+            throw illegalArgument('process');
+        }
+        this.executionProcess = value;
+    }
+
+    get args(): string[] {
+        return this.arguments;
+    }
+
+    set args(value: string[]) {
+        if (!Array.isArray(value)) {
+            value = [];
+        }
+        this.arguments = value;
+    }
+
+    get options(): theia.ProcessExecutionOptions | undefined {
+        return this.executionOptions;
+    }
+
+    set options(value: theia.ProcessExecutionOptions | undefined) {
+        this.executionOptions = value;
+    }
+
+    public computeId(): string {
+        const hash = crypto.createHash('md5');
+        hash.update('process');
+        if (this.executionProcess !== undefined) {
+            hash.update(this.executionProcess);
+        }
+        if (this.arguments && this.arguments.length > 0) {
+            for (const arg of this.arguments) {
+                hash.update(arg);
+            }
+        }
+        return hash.digest('hex');
+    }
+
+    public static is(value: theia.ShellExecution | theia.ProcessExecution): boolean {
+        const candidate = value as ProcessExecution;
+        return candidate && !!candidate.process;
+    }
+}
+
+export enum ShellQuoting {
+    Escape = 1,
+    Strong = 2,
+    Weak = 3
+}
+
+export enum TaskPanelKind {
+    Shared = 1,
+    Dedicated = 2,
+    New = 3
+}
+
+export enum TaskRevealKind {
+    Always = 1,
+    Silent = 2,
+    Never = 3
+}
+
+export class ShellExecution {
+    private shellCommandLine: string;
+    private shellCommand: string | theia.ShellQuotedString;
+    private arguments: (string | theia.ShellQuotedString)[];
+    private shellOptions: theia.ShellExecutionOptions | undefined;
+
+    constructor(commandLine: string, options?: theia.ShellExecutionOptions);
+    constructor(command: string | theia.ShellQuotedString, args: (string | theia.ShellQuotedString)[], options?: theia.ShellExecutionOptions);
+
+    constructor(arg0: string | theia.ShellQuotedString, arg1?: theia.ShellExecutionOptions | (string | theia.ShellQuotedString)[], arg2?: theia.ShellExecutionOptions) {
+        if (Array.isArray(arg1) || typeof arg1 === 'string') {
+            if (!arg0) {
+                throw illegalArgument('command can\'t be undefined or null');
+            }
+            if (typeof arg0 !== 'string' && typeof arg0.value !== 'string') {
+                throw illegalArgument('command');
+            }
+            this.shellCommand = arg0;
+            this.arguments = arg1 as (string | theia.ShellQuotedString)[];
+            this.shellOptions = arg2;
+        } else {
+            if (typeof arg0 !== 'string') {
+                throw illegalArgument('commandLine');
+            }
+            this.shellCommandLine = arg0;
+            this.shellOptions = arg1;
+        }
+    }
+
+    get commandLine(): string {
+        return this.shellCommandLine;
+    }
+
+    set commandLine(value: string) {
+        if (typeof value !== 'string') {
+            throw illegalArgument('commandLine');
+        }
+        this.shellCommandLine = value;
+    }
+
+    get command(): string | theia.ShellQuotedString {
+        return this.shellCommand;
+    }
+
+    set command(value: string | theia.ShellQuotedString) {
+        if (typeof value !== 'string' && typeof value.value !== 'string') {
+            throw illegalArgument('command');
+        }
+        this.shellCommand = value;
+    }
+
+    get args(): (string | theia.ShellQuotedString)[] {
+        return this.arguments;
+    }
+
+    set args(value: (string | theia.ShellQuotedString)[]) {
+        this.arguments = value || [];
+    }
+
+    get options(): theia.ShellExecutionOptions | undefined {
+        return this.shellOptions;
+    }
+
+    set options(value: theia.ShellExecutionOptions | undefined) {
+        this.shellOptions = value;
+    }
+
+    public computeId(): string {
+        const hash = crypto.createHash('md5');
+        hash.update('shell');
+        if (this.shellCommandLine !== undefined) {
+            hash.update(this.shellCommandLine);
+        }
+        if (this.shellCommand !== undefined) {
+            hash.update(typeof this.shellCommand === 'string' ? this.shellCommand : this.shellCommand.value);
+        }
+        if (this.arguments && this.arguments.length > 0) {
+            for (const arg of this.arguments) {
+                hash.update(typeof arg === 'string' ? arg : arg.value);
+            }
+        }
+        return hash.digest('hex');
+    }
+
+    public static is(value: theia.ShellExecution | theia.ProcessExecution): boolean {
+        const candidate = value as ShellExecution;
+        return candidate && (!!candidate.commandLine || !!candidate.command);
+    }
+}
+
+export class TaskGroup {
+    private groupId: string;
+
+    public static Clean: TaskGroup = new TaskGroup('clean', 'Clean');
+    public static Build: TaskGroup = new TaskGroup('build', 'Build');
+    public static Rebuild: TaskGroup = new TaskGroup('rebuild', 'Rebuild');
+    public static Test: TaskGroup = new TaskGroup('test', 'Test');
+
+    public static from(value: string): TaskGroup | undefined {
+        switch (value) {
+            case 'clean':
+                return TaskGroup.Clean;
+            case 'build':
+                return TaskGroup.Build;
+            case 'rebuild':
+                return TaskGroup.Rebuild;
+            case 'test':
+                return TaskGroup.Test;
+            default:
+                return undefined;
+        }
+    }
+
+    constructor(id: string, label: string) {
+        if (typeof id !== 'string') {
+            throw illegalArgument('id');
+        }
+        if (typeof label !== 'string') {
+            throw illegalArgument('name');
+        }
+        this.groupId = id;
+    }
+
+    get id(): string {
+        return this.groupId;
+    }
+}
+
+export enum TaskScope {
+    Global = 1,
+    Workspace = 2
+}
+
+export class Task {
+    private taskDefinition: theia.TaskDefinition;
+    private taskScope: theia.TaskScope.Global | theia.TaskScope.Workspace | theia.WorkspaceFolder | undefined;
+    private taskName: string;
+    private taskExecution: ProcessExecution | ShellExecution | undefined;
+    private taskProblemMatchers: string[];
+    private hasTaskProblemMatchers: boolean;
+    private isTaskBackground: boolean;
+    private taskSource: string;
+    private taskGroup: TaskGroup | undefined;
+    private taskPresentationOptions: theia.TaskPresentationOptions | undefined;
+    constructor(
+        taskDefinition: theia.TaskDefinition,
+        scope: theia.WorkspaceFolder | theia.TaskScope.Global | theia.TaskScope.Workspace,
+        name: string,
+        source: string,
+        execution?: ProcessExecution | ShellExecution,
+        problemMatchers?: string | string[]
+    );
+
+    // Deprecated constructor used by Jake vscode built-in
+    constructor(
+        taskDefinition: theia.TaskDefinition,
+        name: string,
+        source: string,
+        execution?: ProcessExecution | ShellExecution,
+        problemMatchers?: string | string[],
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    constructor(...args: any[]) {
+        let taskDefinition: theia.TaskDefinition;
+        let scope: theia.WorkspaceFolder | theia.TaskScope.Global | theia.TaskScope.Workspace | undefined;
+        let name: string;
+        let source: string;
+        let execution: ProcessExecution | ShellExecution | undefined;
+        let problemMatchers: string | string[] | undefined;
+
+        if (typeof args[1] === 'string') {
+            [
+                taskDefinition,
+                name,
+                source,
+                execution,
+                problemMatchers,
+            ] = args;
+        } else {
+            [
+                taskDefinition,
+                scope,
+                name,
+                source,
+                execution,
+                problemMatchers,
+            ] = args;
+        }
+
+        this.definition = taskDefinition;
+        this.scope = scope;
+        this.name = name;
+        this.source = source;
+        this.execution = execution;
+
+        if (typeof problemMatchers === 'string') {
+            this.taskProblemMatchers = [problemMatchers];
+            this.hasTaskProblemMatchers = true;
+        } else if (Array.isArray(problemMatchers)) {
+            this.taskProblemMatchers = problemMatchers;
+            this.hasTaskProblemMatchers = true;
+        } else {
+            this.taskProblemMatchers = [];
+            this.hasTaskProblemMatchers = false;
+        }
+        this.isTaskBackground = false;
+    }
+
+    get definition(): theia.TaskDefinition {
+        return this.taskDefinition;
+    }
+
+    set definition(value: theia.TaskDefinition) {
+        if (value === undefined || value === null) {
+            throw illegalArgument('Kind can\'t be undefined or null');
+        }
+        this.taskDefinition = value;
+    }
+
+    get scope(): theia.TaskScope.Global | theia.TaskScope.Workspace | theia.WorkspaceFolder | undefined {
+        return this.taskScope;
+    }
+
+    set scope(value: theia.TaskScope.Global | theia.TaskScope.Workspace | theia.WorkspaceFolder | undefined) {
+        if (value === null) {
+            value = undefined;
+        }
+        this.taskScope = value;
+    }
+
+    get name(): string {
+        return this.taskName;
+    }
+
+    set name(value: string) {
+        if (typeof value !== 'string') {
+            throw illegalArgument('name');
+        }
+        this.taskName = value;
+    }
+
+    get execution(): ProcessExecution | ShellExecution | undefined {
+        return this.taskExecution;
+    }
+
+    set execution(value: ProcessExecution | ShellExecution | undefined) {
+        if (value === null) {
+            value = undefined;
+        }
+        this.taskExecution = value;
+        this.updateDefinitionBasedOnExecution();
+    }
+
+    get problemMatchers(): string[] {
+        return this.taskProblemMatchers;
+    }
+
+    set problemMatchers(value: string[]) {
+        if (!Array.isArray(value)) {
+            this.taskProblemMatchers = [];
+            this.hasTaskProblemMatchers = false;
+            return;
+        }
+        this.taskProblemMatchers = value;
+        this.hasTaskProblemMatchers = true;
+    }
+
+    get hasProblemMatchers(): boolean {
+        return this.hasTaskProblemMatchers;
+    }
+
+    get isBackground(): boolean {
+        return this.isTaskBackground;
+    }
+
+    set isBackground(value: boolean) {
+        if (value !== true && value !== false) {
+            value = false;
+        }
+        this.isTaskBackground = value;
+    }
+
+    get source(): string {
+        return this.taskSource;
+    }
+
+    set source(value: string) {
+        if (typeof value !== 'string' || value.length === 0) {
+            throw illegalArgument('source must be a string of length > 0');
+        }
+        this.taskSource = value;
+    }
+
+    get group(): TaskGroup | undefined {
+        return this.taskGroup;
+    }
+
+    set group(value: TaskGroup | undefined) {
+        if (value === undefined || value === null) {
+            this.taskGroup = undefined;
+            return;
+        }
+        this.taskGroup = value;
+    }
+
+    get presentationOptions(): theia.TaskPresentationOptions | undefined {
+        return this.taskPresentationOptions;
+    }
+
+    set presentationOptions(value: theia.TaskPresentationOptions | undefined) {
+        if (value === null) {
+            value = undefined;
+        }
+        this.taskPresentationOptions = value;
+    }
+
+    private updateDefinitionBasedOnExecution(): void {
+        if (this.taskExecution instanceof ProcessExecution) {
+            Object.assign(this.taskDefinition, {
+                type: 'process',
+                id: this.taskExecution.computeId(),
+                taskType: this.taskDefinition!.type
+            });
+        } else if (this.taskExecution instanceof ShellExecution) {
+            Object.assign(this.taskDefinition, {
+                type: 'shell',
+                id: this.taskExecution.computeId(),
+                taskType: this.taskDefinition!.type
+            });
+        }
+    }
+}
+
+export class Task2 extends Task {
+    detail?: string;
+}
+
+export class DebugAdapterExecutable {
+    /**
+     * The command or path of the debug adapter executable.
+     * A command must be either an absolute path of an executable or the name of an command to be looked up via the PATH environment variable.
+     * The special value 'node' will be mapped to VS Code's built-in Node.js runtime.
+     */
+    readonly command: string;
+
+    /**
+     * The arguments passed to the debug adapter executable. Defaults to an empty array.
+     */
+    readonly args?: string[];
+
+    /**
+     * Optional options to be used when the debug adapter is started.
+     * Defaults to undefined.
+     */
+    readonly options?: theia.DebugAdapterExecutableOptions;
+
+    /**
+     * Creates a description for a debug adapter based on an executable program.
+     *
+     * @param command The command or executable path that implements the debug adapter.
+     * @param args Optional arguments to be passed to the command or executable.
+     * @param options Optional options to be used when starting the command or executable.
+     */
+    constructor(command: string, args?: string[], options?: theia.DebugAdapterExecutableOptions) {
+        this.command = command;
+        this.args = args;
+        this.options = options;
+    }
+}
+
+/**
+ * Represents a debug adapter running as a socket based server.
+ */
+export class DebugAdapterServer {
+
+    /**
+     * The port.
+     */
+    readonly port: number;
+
+    /**
+     * The host.
+     */
+    readonly host?: string;
+
+    /**
+     * Create a description for a debug adapter running as a socket based server.
+     */
+    constructor(port: number, host?: string) {
+        this.port = port;
+        this.host = host;
+    }
+}
+
+export enum LogLevel {
+    Trace = 1,
+    Debug = 2,
+    Info = 3,
+    Warning = 4,
+    Error = 5,
+    Critical = 6,
+    Off = 7
+}
+
+/**
+ * The base class of all breakpoint types.
+ */
+export class Breakpoint {
+    /**
+     * Is breakpoint enabled.
+     */
+    enabled: boolean;
+    /**
+     * An optional expression for conditional breakpoints.
+     */
+    condition?: string;
+    /**
+     * An optional expression that controls how many hits of the breakpoint are ignored.
+     */
+    hitCondition?: string;
+    /**
+     * An optional message that gets logged when this breakpoint is hit. Embedded expressions within {} are interpolated by the debug adapter.
+     */
+    logMessage?: string;
+
+    protected constructor(enabled?: boolean, condition?: string, hitCondition?: string, logMessage?: string) {
+        this.enabled = enabled || false;
+        this.condition = condition;
+        this.hitCondition = hitCondition;
+        this.logMessage = logMessage;
+    }
+
+    private _id: string | undefined;
+    /**
+     * The unique ID of the breakpoint.
+     */
+    get id(): string {
+        if (!this._id) {
+            this._id = UUID.uuid4();
+        }
+        return this._id;
+    }
+
+}
+
+/**
+ * A breakpoint specified by a source location.
+ */
+export class SourceBreakpoint extends Breakpoint {
+    /**
+     * The source and line position of this breakpoint.
+     */
+    location: Location;
+
+    /**
+     * Create a new breakpoint for a source location.
+     */
+    constructor(location: Location, enabled?: boolean, condition?: string, hitCondition?: string, logMessage?: string) {
+        super(enabled, condition, hitCondition, logMessage);
+        this.location = location;
+    }
+}
+
+/**
+ * A breakpoint specified by a function name.
+ */
+export class FunctionBreakpoint extends Breakpoint {
+    /**
+     * The name of the function to which this breakpoint is attached.
+     */
+    functionName: string;
+
+    /**
+     * Create a new function breakpoint.
+     */
+    constructor(functionName: string, enabled?: boolean, condition?: string, hitCondition?: string, logMessage?: string) {
+        super(enabled, condition, hitCondition, logMessage);
+        this.functionName = functionName;
+    }
+}
+
+export class Color {
+    readonly red: number;
+    readonly green: number;
+    readonly blue: number;
+    readonly alpha: number;
+
+    constructor(red: number, green: number, blue: number, alpha: number) {
+        this.red = red;
+        this.green = green;
+        this.blue = blue;
+        this.alpha = alpha;
+    }
+}
+
+export class ColorInformation {
+    range: Range;
+    color: Color;
+
+    constructor(range: Range, color: Color) {
+        if (color && !(color instanceof Color)) {
+            throw illegalArgument('color');
+        }
+        if (!Range.isRange(range)) {
+            throw illegalArgument('range');
+        }
+        this.range = range;
+        this.color = color;
+    }
+}
+
+export class ColorPresentation {
+    label: string;
+    textEdit?: TextEdit;
+    additionalTextEdits?: TextEdit[];
+
+    constructor(label: string) {
+        if (!label || typeof label !== 'string') {
+            throw illegalArgument('label');
+        }
+        this.label = label;
+    }
+}
+
+export enum ColorFormat {
+    RGB = 0,
+    HEX = 1,
+    HSL = 2
+}
+
+export class FoldingRange {
+    start: number;
+    end: number;
+    kind?: FoldingRangeKind;
+
+    constructor(start: number, end: number, kind?: FoldingRangeKind) {
+        this.start = start;
+        this.end = end;
+        this.kind = kind;
+    }
+}
+
+export enum FoldingRangeKind {
+    Comment = 1,
+    Imports = 2,
+    Region = 3
+}
+
+export class SelectionRange {
+
+    range: Range;
+    parent?: SelectionRange;
+
+    constructor(range: Range, parent?: SelectionRange) {
+        this.range = range;
+        this.parent = parent;
+
+        if (parent && !parent.range.contains(this.range)) {
+            throw new Error('Invalid argument: parent must contain this range');
+        }
+    }
+}
+
+/**
+ * Enumeration of the supported operating systems.
+ */
+export enum OperatingSystem {
+    Windows = 'Windows',
+    Linux = 'Linux',
+    OSX = 'OSX'
+}
+
+/** The areas of the application shell where webview panel can reside. */
+export enum WebviewPanelTargetArea {
+    Main = 'main',
+    Left = 'left',
+    Right = 'right',
+    Bottom = 'bottom'
+}
+
+/**
+ * Possible kinds of UI that can use extensions.
+ */
+export enum UIKind {
+
+    /**
+     * Extensions are accessed from a desktop application.
+     */
+    Desktop = 1,
+
+    /**
+     * Extensions are accessed from a web browser.
+     */
+    Web = 2
+}
+
+export class CallHierarchyItem {
+    _sessionId?: string;
+    _itemId?: string;
+
+    kind: SymbolKind;
+    name: string;
+    detail?: string;
+    uri: URI;
+    range: Range;
+    selectionRange: Range;
+
+    constructor(kind: SymbolKind, name: string, detail: string, uri: URI, range: Range, selectionRange: Range) {
+        this.kind = kind;
+        this.name = name;
+        this.detail = detail;
+        this.uri = uri;
+        this.range = range;
+        this.selectionRange = selectionRange;
+    }
+
+    static isCallHierarchyItem(thing: {}): thing is theia.CallHierarchyItem {
+        if (thing instanceof CallHierarchyItem) {
+            return true;
+        }
+        if (!thing) {
+            return false;
+        }
+        return typeof (<CallHierarchyItem>thing).kind === 'number' &&
+            typeof (<CallHierarchyItem>thing).name === 'string' &&
+            URI.isUri((<CallHierarchyItem>thing).uri) &&
+            Range.isRange((<CallHierarchyItem>thing).range) &&
+            Range.isRange((<CallHierarchyItem>thing).selectionRange);
+    }
+}
+
+export class CallHierarchyIncomingCall {
+
+    from: theia.CallHierarchyItem;
+    fromRanges: theia.Range[];
+
+    constructor(item: theia.CallHierarchyItem, fromRanges: theia.Range[]) {
+        this.fromRanges = fromRanges;
+        this.from = item;
+    }
+}
+
+export class CallHierarchyOutgoingCall {
+
+    to: theia.CallHierarchyItem;
+    fromRanges: theia.Range[];
+
+    constructor(item: theia.CallHierarchyItem, fromRanges: theia.Range[]) {
+        this.fromRanges = fromRanges;
+        this.to = item;
+    }
 }

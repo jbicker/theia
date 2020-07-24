@@ -15,13 +15,20 @@
  ********************************************************************************/
 
 import { ContainerModule } from 'inversify';
-import { bindContributionProvider, ConnectionHandler } from '../../common';
+import { bindContributionProvider } from '../../common';
 import { BackendApplicationContribution } from '../backend-application';
-import { MessagingContribution } from './messaging-contribution';
+import { MessagingContribution, MessagingContainer } from './messaging-contribution';
+import { ConnectionContainerModule } from './connection-container-module';
 import { MessagingService } from './messaging-service';
 
 export const messagingBackendModule = new ContainerModule(bind => {
-    bind(BackendApplicationContribution).to(MessagingContribution).inSingletonScope();
-    bindContributionProvider(bind, ConnectionHandler);
+    bindContributionProvider(bind, ConnectionContainerModule);
     bindContributionProvider(bind, MessagingService.Contribution);
+    bind(MessagingService.Identifier).to(MessagingContribution).inSingletonScope();
+    bind(MessagingContribution).toDynamicValue(({ container }) => {
+        const child = container.createChild();
+        child.bind(MessagingContainer).toConstantValue(container);
+        return child.get(MessagingService.Identifier);
+    }).inSingletonScope();
+    bind(BackendApplicationContribution).toService(MessagingContribution);
 });

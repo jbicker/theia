@@ -15,14 +15,15 @@
  ********************************************************************************/
 
 import { inject, injectable, named } from 'inversify';
-import { ContributionProvider, CommandRegistry, MenuModelRegistry, ILogger, isOSX } from '../common';
+import { ContributionProvider, CommandRegistry, MenuModelRegistry, isOSX } from '../common';
 import { MaybePromise } from '../common/types';
 import { KeybindingRegistry } from './keybinding';
 import { Widget } from './widgets';
 import { ApplicationShell } from './shell/application-shell';
-import { ShellLayoutRestorer } from './shell/shell-layout-restorer';
+import { ShellLayoutRestorer, ApplicationShellLayoutMigrationError } from './shell/shell-layout-restorer';
 import { FrontendApplicationStateService } from './frontend-application-state';
-import { preventNavigation, parseCssTime } from './browser';
+import { preventNavigation, parseCssTime, animationFrame } from './browser';
+import { CorePreferences } from './core-preferences';
 
 /**
  * Clients can implement to get a callback for contributing widgets to a shell on start.
@@ -31,9 +32,15 @@ export const FrontendApplicationContribution = Symbol('FrontendApplicationContri
 export interface FrontendApplicationContribution {
 
     /**
-     * Called on application startup before onStart is called.
+     * Called on application startup before configure is called.
      */
     initialize?(): void;
+
+    /**
+     * Called before commands, key bindings and menus are initialized.
+     * Should return a promise if it runs asynchronously.
+     */
+    configure?(app: FrontendApplication): MaybePromise<void>;
 
     /**
      * Called when the application is started. The application shell is not attached yet when this method runs.
@@ -42,9 +49,16 @@ export interface FrontendApplicationContribution {
     onStart?(app: FrontendApplication): MaybePromise<void>;
 
     /**
+     * Called on `beforeunload` event, right before the window closes.
+     * Return `true` in order to prevent exit.
+     * Note: No async code allowed, this function has to run on one tick.
+     */
+    onWillStop?(app: FrontendApplication): boolean | void;
+
+    /**
      * Called when an application is stopped or unloaded.
      *
-     * Note that this is implemented using `window.unload` which doesn't allow any asynchronous code anymore.
+     * Note that this is implemented using `window.beforeunload` which doesn't allow any asynchronous code anymore.
      * I.e. this is the last tick.
      */
     onStop?(app: FrontendApplication): void;
@@ -54,7 +68,14 @@ export interface FrontendApplicationContribution {
      * Should return a promise if it runs asynchronously.
      */
     initializeLayout?(app: FrontendApplication): MaybePromise<void>;
+
+    /**
+     * An event is emitted when a layout is initialized, but before the shell is attached.
+     */
+    onDidInitializeLayout?(app: FrontendApplication): MaybePromise<void>;
 }
+
+const TIMER_WARNING_THRESHOLD = 100;
 
 /**
  * Default frontend contribution that can be extended by clients if they do not want to implement any of the
@@ -63,7 +84,7 @@ export interface FrontendApplicationContribution {
 @injectable()
 export abstract class DefaultFrontendApplicationContribution implements FrontendApplicationContribution {
 
-    initialize() {
+    initialize(): void {
         // NOOP
     }
 
@@ -72,11 +93,13 @@ export abstract class DefaultFrontendApplicationContribution implements Frontend
 @injectable()
 export class FrontendApplication {
 
+    @inject(CorePreferences)
+    protected readonly corePreferences: CorePreferences;
+
     constructor(
         @inject(CommandRegistry) protected readonly commands: CommandRegistry,
         @inject(MenuModelRegistry) protected readonly menus: MenuModelRegistry,
         @inject(KeybindingRegistry) protected readonly keybindings: KeybindingRegistry,
-        @inject(ILogger) protected readonly logger: ILogger,
         @inject(ShellLayoutRestorer) protected readonly layoutRestorer: ShellLayoutRestorer,
         @inject(ContributionProvider) @named(FrontendApplicationContribution)
         protected readonly contributions: ContributionProvider<FrontendApplicationContribution>,
@@ -103,11 +126,12 @@ export class FrontendApplication {
 
         const host = await this.getHost();
         this.attachShell(host);
-        await new Promise(resolve => requestAnimationFrame(() => resolve()));
+        await animationFrame();
         this.stateService.state = 'attached_shell';
 
         await this.initializeLayout();
         this.stateService.state = 'initialized_layout';
+        await this.fireOnDidInitializeLayout();
 
         await this.revealShell(host);
         this.registerEventListeners();
@@ -134,21 +158,55 @@ export class FrontendApplication {
         return startupElements.length === 0 ? undefined : startupElements[0] as HTMLElement;
     }
 
+    /* vvv HOTFIX begin vvv
+     *
+     * This is a hotfix against issues eclipse/theia#6459 and gitpod-io/gitpod#875 .
+     * It should be reverted after Theia was updated to the newer Monaco.
+     */
+    protected inComposition = false;
+    /**
+     * Register composition related event listeners.
+     */
+    protected registerCompositionEventListeners(): void {
+        window.document.addEventListener('compositionstart', event => {
+            this.inComposition = true;
+        });
+        window.document.addEventListener('compositionend', event => {
+            this.inComposition = false;
+        });
+    }
+    /* ^^^ HOTFIX end ^^^ */
+
     /**
      * Register global event listeners.
      */
     protected registerEventListeners(): void {
-        window.addEventListener('unload', () => {
+        this.registerCompositionEventListeners(); /* Hotfix. See above. */
+
+        window.addEventListener('beforeunload', () => {
             this.stateService.state = 'closing_window';
             this.layoutRestorer.storeLayout(this);
             this.stopContributions();
         });
         window.addEventListener('resize', () => this.shell.update());
-        document.addEventListener('keydown', event => this.keybindings.run(event), true);
+        document.addEventListener('keydown', event => {
+            if (this.inComposition !== true) {
+                this.keybindings.run(event);
+            }
+        }, true);
+        document.addEventListener('touchmove', event => { event.preventDefault(); }, { passive: false });
         // Prevent forward/back navigation by scrolling in OS X
         if (isOSX) {
-            document.body.addEventListener('wheel', preventNavigation);
+            document.body.addEventListener('wheel', preventNavigation, { passive: false });
         }
+        // Prevent the default browser behavior when dragging and dropping files into the window.
+        window.addEventListener('dragover', event => {
+            event.preventDefault();
+        }, false);
+        window.addEventListener('drop', event => {
+            event.preventDefault();
+        }, false);
+
     }
 
     /**
@@ -205,7 +263,12 @@ export class FrontendApplication {
         try {
             return await this.layoutRestorer.restoreLayout(this);
         } catch (error) {
-            this.logger.error('Could not restore layout', error);
+            if (ApplicationShellLayoutMigrationError.is(error)) {
+                console.warn(error.message);
+                console.info('Initializing the default layout instead...');
+            } else {
+                console.error('Could not restore layout', error);
+            }
             return false;
         }
     }
@@ -224,6 +287,16 @@ export class FrontendApplication {
         }
     }
 
+    protected async fireOnDidInitializeLayout(): Promise<void> {
+        for (const contribution of this.contributions.getContributions()) {
+            if (contribution.onDidInitializeLayout) {
+                await this.measure(contribution.constructor.name + '.onDidInitializeLayout',
+                    () => contribution.onDidInitializeLayout!(this)
+                );
+            }
+        }
+    }
+
     /**
      * Initialize and start the frontend application contributions.
      */
@@ -231,9 +304,23 @@ export class FrontendApplication {
         for (const contribution of this.contributions.getContributions()) {
             if (contribution.initialize) {
                 try {
-                    contribution.initialize();
+                    await this.measure(contribution.constructor.name + '.initialize',
+                        () => contribution.initialize!()
+                    );
                 } catch (error) {
-                    this.logger.error('Could not initialize contribution', error);
+                    console.error('Could not initialize contribution', error);
+                }
+            }
+        }
+
+        for (const contribution of this.contributions.getContributions()) {
+            if (contribution.configure) {
+                try {
+                    await this.measure(contribution.constructor.name + '.configure',
+                        () => contribution.configure!(this)
+                    );
+                } catch (error) {
+                    console.error('Could not configure contribution', error);
                 }
             }
         }
@@ -243,9 +330,15 @@ export class FrontendApplication {
          * - decouple commands & menus
          * - consider treat commands, keybindings and menus as frontend application contributions
          */
-        this.commands.onStart();
-        this.keybindings.onStart();
-        this.menus.onStart();
+        await this.measure('commands.onStart',
+            () => this.commands.onStart()
+        );
+        await this.measure('keybindings.onStart',
+            () => this.keybindings.onStart()
+        );
+        await this.measure('menus.onStart',
+            () => this.menus.onStart()
+        );
         for (const contribution of this.contributions.getContributions()) {
             if (contribution.onStart) {
                 try {
@@ -253,7 +346,7 @@ export class FrontendApplication {
                         () => contribution.onStart!(this)
                     );
                 } catch (error) {
-                    this.logger.error('Could not start contribution', error);
+                    console.error('Could not start contribution', error);
                 }
             }
         }
@@ -263,15 +356,17 @@ export class FrontendApplication {
      * Stop the frontend application contributions. This is called when the window is unloaded.
      */
     protected stopContributions(): void {
+        console.info('>>> Stopping frontend contributions...');
         for (const contribution of this.contributions.getContributions()) {
             if (contribution.onStop) {
                 try {
                     contribution.onStop(this);
                 } catch (error) {
-                    this.logger.error('Could not stop contribution', error);
+                    console.error('Could not stop contribution', error);
                 }
             }
         }
+        console.info('<<< All frontend contributions have been stopped.');
     }
 
     protected async measure<T>(name: string, fn: () => MaybePromise<T>): Promise<T> {
@@ -282,10 +377,11 @@ export class FrontendApplication {
         performance.mark(endMark);
         performance.measure(name, startMark, endMark);
         for (const item of performance.getEntriesByName(name)) {
-            if (item.duration > 100) {
-                console.warn(item.name + ' is slow, took: ' + item.duration + ' ms');
+            const contribution = `Frontend ${item.name}`;
+            if (item.duration > TIMER_WARNING_THRESHOLD) {
+                console.warn(`${contribution} is slow, took: ${item.duration.toFixed(1)} ms`);
             } else {
-                console.debug(item.name + ' took ' + item.duration + ' ms');
+                console.debug(`${contribution} took: ${item.duration.toFixed(1)} ms`);
             }
         }
         performance.clearMeasures(name);

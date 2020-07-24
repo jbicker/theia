@@ -14,7 +14,7 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-// tslint:disable:no-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { Disposable } from '@theia/core';
 import { ApplicationError } from '@theia/core/lib/common/application-error';
@@ -83,17 +83,12 @@ export interface DebugService extends Disposable {
      * @param config The resolved [debug configuration](#DebugConfiguration).
      * @returns The identifier of the created [debug adapter session](#DebugAdapterSession).
      */
-    create(config: DebugConfiguration): Promise<string>;
+    createDebugSession(config: DebugConfiguration): Promise<string>;
 
     /**
      * Stop a running session for the given session id.
      */
-    stop(sessionId: string): Promise<void>;
-
-    /**
-     * Stop all running sessions.
-     */
-    stop(): Promise<void>;
+    terminateDebugSession(sessionId: string): Promise<void>;
 }
 
 /**

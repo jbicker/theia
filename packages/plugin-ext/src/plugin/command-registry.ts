@@ -13,158 +13,205 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
-import * as theia from '@theia/plugin';
-import { CommandRegistryExt, PLUGIN_RPC_CONTEXT as Ext, CommandRegistryMain } from '../api/plugin-api';
-import { RPCProtocol } from '../api/rpc-protocol';
-import { Disposable } from './types-impl';
-import { Command } from '../api/model';
-import { ObjectIdentifier } from '../common/object-identifier';
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 
-// tslint:disable-next-line:no-any
-export type Handler = <T>(...args: any[]) => T | PromiseLike<T>;
+import * as theia from '@theia/plugin';
+import * as model from '../common/plugin-api-rpc-model';
+import { CommandRegistryExt, PLUGIN_RPC_CONTEXT as Ext, CommandRegistryMain } from '../common/plugin-api-rpc';
+import { RPCProtocol } from '../common/rpc-protocol';
+import { Disposable } from './types-impl';
+import { DisposableCollection } from '@theia/core';
+import { KnownCommands } from './known-commands';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Handler = <T>(...args: any[]) => T | PromiseLike<T | undefined>;
+
+export interface ArgumentProcessor {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    processArgument(arg: any): any;
+}
 
 export class CommandRegistryImpl implements CommandRegistryExt {
 
     private proxy: CommandRegistryMain;
-    private commands = new Map<string, Handler>();
-
-    private readonly converter: CommandsConverter;
+    private readonly commands = new Set<string>();
+    private readonly handlers = new Map<string, Handler>();
+    private readonly argumentProcessors: ArgumentProcessor[];
+    private readonly commandsConverter: CommandsConverter;
 
     constructor(rpc: RPCProtocol) {
         this.proxy = rpc.getProxy(Ext.COMMAND_REGISTRY_MAIN);
-        this.converter = new CommandsConverter(this);
+        this.argumentProcessors = [];
+        this.commandsConverter = new CommandsConverter(this);
     }
 
-    getConverter(): CommandsConverter {
-        return this.converter;
+    get converter(): CommandsConverter {
+        return this.commandsConverter;
     }
 
-    registerCommand(command: theia.Command, handler?: Handler): Disposable {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registerCommand(command: theia.CommandDescription, handler?: Handler, thisArg?: any): Disposable {
         if (this.commands.has(command.id)) {
             throw new Error(`Command ${command.id} already exist`);
         }
-        if (handler) {
-            this.commands.set(command.id, handler);
-        }
+        this.commands.add(command.id);
         this.proxy.$registerCommand(command);
 
-        return Disposable.create(() => {
-            this.proxy.$unregisterCommand(command.id);
-        });
-
-    }
-
-    registerHandler(commandId: string, handler: Handler): Disposable {
-        if (this.commands.has(commandId)) {
-            throw new Error(`Command ${commandId} already has handler`);
-        }
-        this.commands.set(commandId, handler);
-        return Disposable.create(() => {
-            this.proxy.$unregisterCommand(commandId);
-        });
-    }
-
-    dispose(): void {
-        throw new Error('Method not implemented.');
-    }
-
-    // tslint:disable-next-line:no-any
-    $executeCommand<T>(id: string, args: any[]): PromiseLike<T> {
-        if (this.commands.has(id)) {
-            return this.executeLocalCommand(id, args);
-        } else {
-            return Promise.reject(`Command: ${id} does not exist.`);
-        }
-    }
-
-    // tslint:disable-next-line:no-any
-    executeCommand<T>(id: string, args: any[]): PromiseLike<T | undefined> {
-        if (this.commands.has(id)) {
-            return this.executeLocalCommand(id, args);
-        } else {
-            return this.proxy.$executeCommand(id, args);
-        }
-    }
-
-    // tslint:disable-next-line:no-any
-    private executeLocalCommand<T>(id: string, args: any[]): PromiseLike<T> {
-        const handler = this.commands.get(id);
+        const toDispose: Disposable[] = [];
         if (handler) {
-            return Promise.resolve(handler(args));
-        } else {
-            return Promise.reject(new Error(`Command ${id} doesn't exist`));
+            toDispose.push(this.registerHandler(command.id, handler, thisArg));
         }
+        toDispose.push(Disposable.create(() => {
+            this.commands.delete(command.id);
+            this.proxy.$unregisterCommand(command.id);
+        }));
+        return Disposable.from(...toDispose);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registerHandler(commandId: string, handler: Handler, thisArg?: any): Disposable {
+        if (this.handlers.has(commandId)) {
+            throw new Error(`Command "${commandId}" already has handler`);
+        }
+        this.proxy.$registerHandler(commandId);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.handlers.set(commandId, (...args: any[]) => handler.apply(thisArg, args));
+        return Disposable.create(() => {
+            this.handlers.delete(commandId);
+            this.proxy.$unregisterHandler(commandId);
+        });
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    $executeCommand<T>(id: string, ...args: any[]): PromiseLike<T | undefined> {
+        if (this.handlers.has(id)) {
+            return this.executeLocalCommand(id, ...args);
+        } else {
+            return Promise.reject(new Error(`Command: ${id} does not exist.`));
+        }
+    }
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    executeCommand<T>(id: string, ...args: any[]): PromiseLike<T | undefined> {
+        if (this.handlers.has(id)) {
+            return this.executeLocalCommand(id, ...args);
+        } else if (KnownCommands.mapped(id)) {
+            // Using the KnownCommand exclusions, convert the commands manually
+            return KnownCommands.map(id, args, (mappedId: string, mappedArgs: any[] | undefined, mappedResult: KnownCommands.ConversionFunction) => {
+                const mr: KnownCommands.ConversionFunction = mappedResult;
+                return this.proxy.$executeCommand(mappedId, ...mappedArgs).then((result: any) => {
+                    if (!result) {
+                        return undefined;
+                    }
+                    if (!mr) {
+                        return result;
+                    }
+                    return mr(result);
+                });
+            }
+            );
+        } else {
+            return this.proxy.$executeCommand(id, ...args);
+        }
+    }
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    getKeyBinding(commandId: string): PromiseLike<theia.CommandKeyBinding[] | undefined> {
+        return this.proxy.$getKeyBinding(commandId);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private async executeLocalCommand<T>(id: string, ...args: any[]): Promise<T | undefined> {
+        const handler = this.handlers.get(id);
+        if (handler) {
+            return handler<T>(...args.map(arg => this.argumentProcessors.reduce((r, p) => p.processArgument(r), arg)));
+        } else {
+            throw new Error(`Command ${id} doesn't exist`);
+        }
+    }
+
+    async getCommands(filterUnderscoreCommands: boolean = false): Promise<string[]> {
+        const result = await this.proxy.$getCommands();
+        if (filterUnderscoreCommands) {
+            return result.filter(command => command[0] !== '_');
+        }
+        return result;
+    }
+
+    registerArgumentProcessor(processor: ArgumentProcessor): void {
+        this.argumentProcessors.push(processor);
     }
 }
 
-/** Converter between internal and api commands. */
+// copied and modified from https://github.com/microsoft/vscode/blob/1.37.1/src/vs/workbench/api/common/extHostCommands.ts#L217-L259
 export class CommandsConverter {
 
-    private readonly delegatingCommandId: string;
+    private readonly safeCommandId: string;
+    private readonly commands: CommandRegistryImpl;
+    private readonly commandsMap = new Map<number, theia.Command>();
+    private handle = 0;
+    private isSafeCommandRegistered: boolean;
 
-    private cacheId = 0;
-    private cache = new Map<number, theia.Command>();
-
-    constructor(private readonly commands: CommandRegistryImpl) {
-        this.delegatingCommandId = `_internal_command_delegation_${Date.now()}`;
-        this.commands.registerHandler(this.delegatingCommandId, this.executeConvertedCommand);
+    constructor(commands: CommandRegistryImpl) {
+        this.safeCommandId = `theia_safe_cmd_${Date.now().toString()}`;
+        this.commands = commands;
+        this.isSafeCommandRegistered = false;
     }
 
-    toInternal(command: theia.Command | undefined): Command | undefined {
-        if (!command || !command.label) {
+    /**
+     * Convert to a command that can be safely passed over JSON-RPC.
+     */
+    toSafeCommand(command: undefined, disposables: DisposableCollection): undefined;
+    toSafeCommand(command: theia.Command, disposables: DisposableCollection): model.Command;
+    toSafeCommand(command: theia.Command | undefined, disposables: DisposableCollection): model.Command | undefined;
+    toSafeCommand(command: theia.Command | undefined, disposables: DisposableCollection): model.Command | undefined {
+        if (!command) {
             return undefined;
         }
-
-        const result: Command = {
-            id: command.id,
-            title: command.label
-        };
-
-        if (command.id && !CommandsConverter.isFalsyOrEmpty(command.arguments)) {
-            const id = this.cacheId++;
-            ObjectIdentifier.mixin(result, id);
-            this.cache.set(id, command);
-
-            result.id = this.delegatingCommandId;
-            result.arguments = [id];
+        const result = this.toInternalCommand(command);
+        if (KnownCommands.mapped(result.id)) {
+            return result;
         }
 
-        if (command.tooltip) {
-            result.tooltip = command.tooltip;
+        if (!this.isSafeCommandRegistered) {
+            this.commands.registerCommand({ id: this.safeCommandId }, this.executeSafeCommand, this);
+            this.isSafeCommandRegistered = true;
+        }
+
+        if (command.command && command.arguments && command.arguments.length > 0) {
+            const id = this.handle++;
+            this.commandsMap.set(id, command);
+            disposables.push(new Disposable(() => this.commandsMap.delete(id)));
+            result.id = this.safeCommandId;
+            result.arguments = [id];
         }
 
         return result;
     }
 
-    fromInternal(command: Command | undefined): theia.Command | undefined {
-        if (!command) {
-            return undefined;
-        }
-
-        const id = ObjectIdentifier.of(command);
-        if (typeof id === 'number') {
-            return this.cache.get(id);
-        } else {
-            return {
-                id: command.id,
-                label: command.title,
-                arguments: command.arguments
-            };
-        }
+    protected toInternalCommand(external: theia.Command): model.Command {
+        // we're deprecating Command.id, so it has to be optional.
+        // Existing code will have compiled against a non - optional version of the field, so asserting it to exist is ok
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return KnownCommands.map((external.command || external.id)!, external.arguments, (mappedId: string, mappedArgs: any[]) =>
+            ({
+                id: mappedId,
+                title: external.title || external.label || ' ',
+                tooltip: external.tooltip,
+                arguments: mappedArgs
+            }));
     }
 
-    private executeConvertedCommand(...args: any[]): PromiseLike<any> {
-        const actualCmd = this.cache.get(args[0]);
-        if (!actualCmd) {
-            return Promise.resolve(undefined);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private executeSafeCommand<R>(...args: any[]): PromiseLike<R | undefined> {
+        const command = this.commandsMap.get(args[0]);
+        if (!command || !command.command) {
+            return Promise.reject('command NOT FOUND');
         }
-        return this.commands.executeCommand(actualCmd.id, actualCmd.arguments || []);
+        return this.commands.executeCommand(command.command, ...(command.arguments || []));
     }
 
-    /**
-     * @returns `false` if the provided object is an array and not empty.
-     */
-    private static isFalsyOrEmpty(obj: any): boolean {
-        return !Array.isArray(obj) || (<Array<any>>obj).length === 0;
-    }
 }

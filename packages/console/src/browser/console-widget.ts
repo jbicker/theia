@@ -17,6 +17,7 @@
 import { ElementExt } from '@phosphor/domutils';
 import { injectable, inject, postConstruct, interfaces, Container } from 'inversify';
 import { TreeSourceNode } from '@theia/core/lib/browser/source-tree';
+import { ContextKey } from '@theia/core/lib/browser/context-key-service';
 import { BaseWidget, PanelLayout, Widget, Message, MessageLoop, StatefulWidget, CompositeTreeNode } from '@theia/core/lib/browser';
 import { MonacoEditor } from '@theia/monaco/lib/browser/monaco-editor';
 import URI from '@theia/core/lib/common/uri';
@@ -38,6 +39,7 @@ export interface ConsoleOptions {
         uri: URI
         options?: MonacoEditor.IOptions
     }
+    inputFocusContextKey?: ContextKey<boolean>
 }
 
 @injectable()
@@ -84,7 +86,7 @@ export class ConsoleWidget extends BaseWidget implements StatefulWidget {
 
     @postConstruct()
     protected async init(): Promise<void> {
-        const { id, title } = this.options;
+        const { id, title, inputFocusContextKey } = this.options;
         const { label, iconClass, caption } = Object.assign({}, title);
         this.id = id;
         this.title.closable = true;
@@ -107,8 +109,16 @@ export class ConsoleWidget extends BaseWidget implements StatefulWidget {
         const input = this._input = await this.createInput(inputWidget.node);
         this.toDispose.push(input);
         this.toDispose.push(input.getControl().onDidLayoutChange(() => this.resizeContent()));
-        this.toDispose.push(input.getControl().onDidChangeConfiguration(({ fontInfo }) => fontInfo && this.updateFont()));
+
+        // todo update font if fontInfo was changed only
+        // it's impossible at the moment, but will be fixed for next upgrade of monaco version
+        // see https://github.com/microsoft/vscode/commit/5084e8ca1935698c98c163e339ca664818786c6d
+        this.toDispose.push(input.getControl().onDidChangeConfiguration(() => this.updateFont()));
+
         this.updateFont();
+        if (inputFocusContextKey) {
+            this.toDispose.push(input.onFocusChanged(() => inputFocusContextKey.set(this.hasInputFocus())));
+        }
     }
 
     protected createInput(node: HTMLElement): Promise<MonacoEditor> {
@@ -116,7 +126,7 @@ export class ConsoleWidget extends BaseWidget implements StatefulWidget {
     }
 
     protected updateFont(): void {
-        const { fontFamily, fontSize, lineHeight } = this._input.getControl().getConfiguration().fontInfo;
+        const { fontFamily, fontSize, lineHeight } = this._input.getControl().getOption(monaco.editor.EditorOption.fontInfo);
         this.content.node.style.fontFamily = fontFamily;
         this.content.node.style.fontSize = fontSize + 'px';
         this.content.node.style.lineHeight = lineHeight + 'px';
@@ -188,8 +198,8 @@ export class ConsoleWidget extends BaseWidget implements StatefulWidget {
         const value = this.history.next || '';
         const editor = this.input.getControl();
         editor.setValue(value);
-        const lineNumber = editor.getModel().getLineCount();
-        const column = editor.getModel().getLineMaxColumn(lineNumber);
+        const lineNumber = editor.getModel()!.getLineCount();
+        const column = editor.getModel()!.getLineMaxColumn(lineNumber);
         editor.setPosition({ lineNumber, column });
     }
 
@@ -239,14 +249,18 @@ export class ConsoleWidget extends BaseWidget implements StatefulWidget {
 
     restoreState(oldState: object): void {
         if ('history' in oldState) {
-            // tslint:disable-next-line:no-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this.history.restore((<any>oldState)['history']);
         }
         this.input.getControl().setValue(this.history.current || '');
         if ('input' in oldState) {
-            // tslint:disable-next-line:no-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             this.input.restoreViewState((<any>oldState)['input']);
         }
+    }
+
+    hasInputFocus(): boolean {
+        return this._input && this._input.isFocused({ strict: true });
     }
 
 }

@@ -18,7 +18,7 @@ import { injectable, inject } from 'inversify';
 import { Widget } from '@phosphor/widgets';
 import { FrontendApplicationContribution, WidgetOpenerOptions, NavigatableWidgetOpenHandler } from '@theia/core/lib/browser';
 import { EditorManager, TextEditor, EditorWidget, EditorContextMenu } from '@theia/editor/lib/browser';
-import { DisposableCollection, CommandContribution, CommandRegistry, Command, MenuContribution, MenuModelRegistry, CommandHandler, Disposable } from '@theia/core/lib/common';
+import { DisposableCollection, CommandContribution, CommandRegistry, Command, MenuContribution, MenuModelRegistry, Disposable } from '@theia/core/lib/common';
 import { TabBarToolbarContribution, TabBarToolbarRegistry } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 import URI from '@theia/core/lib/common/uri';
 import { Position } from 'vscode-languageserver-types';
@@ -35,7 +35,13 @@ export namespace PreviewCommands {
      * See in (`WorkspaceCommandContribution`)[https://bit.ly/2DncrSD].
      */
     export const OPEN: Command = {
-        id: 'preview:open'
+        id: 'preview:open',
+        label: 'Open Preview',
+        iconClass: 'theia-open-preview-icon'
+    };
+    export const OPEN_SOURCE: Command = {
+        id: 'preview.open.source',
+        iconClass: 'theia-open-file-icon'
     };
 }
 
@@ -44,7 +50,7 @@ export interface PreviewOpenerOptions extends WidgetOpenerOptions {
 }
 
 @injectable()
-// tslint:disable-next-line:max-line-length
+// eslint-disable-next-line max-len
 export class PreviewContribution extends NavigatableWidgetOpenHandler<PreviewWidget> implements CommandContribution, MenuContribution, FrontendApplicationContribution, TabBarToolbarContribution {
 
     readonly id = PreviewUri.id;
@@ -61,17 +67,11 @@ export class PreviewContribution extends NavigatableWidgetOpenHandler<PreviewWid
 
     protected readonly synchronizedUris = new Set<string>();
 
-    protected readonly defaultOpenFromEditorOptions: PreviewOpenerOptions = {
-        widgetOptions: { area: 'main', mode: 'split-right' },
-        mode: 'reveal'
-    };
+    protected scrollSyncLockOn: 'preview' | 'editor' | undefined = undefined;
 
-    protected readonly defaultOpenOptions: PreviewOpenerOptions = {
-        widgetOptions: { area: 'main', mode: 'tab-after' },
-        mode: 'activate'
-    };
+    protected scrollSyncLockTimeout: number | undefined;
 
-    onStart() {
+    onStart(): void {
         this.onCreated(previewWidget => {
             this.registerOpenOnDoubleClick(previewWidget);
             this.registerEditorAndPreviewSync(previewWidget);
@@ -79,6 +79,16 @@ export class PreviewContribution extends NavigatableWidgetOpenHandler<PreviewWid
         this.editorManager.onCreated(editorWidget => {
             this.registerEditorAndPreviewSync(editorWidget);
         });
+    }
+
+    protected async lockScrollSync(on: 'preview' | 'editor', delay: number = 50): Promise<void> {
+        this.scrollSyncLockOn = on;
+        if (this.scrollSyncLockTimeout) {
+            window.clearTimeout(this.scrollSyncLockTimeout);
+        }
+        this.scrollSyncLockTimeout = window.setTimeout(() => {
+            this.scrollSyncLockOn = undefined;
+        }, delay);
     }
 
     protected async registerEditorAndPreviewSync(source: PreviewWidget | EditorWidget): Promise<void> {
@@ -105,7 +115,17 @@ export class PreviewContribution extends NavigatableWidgetOpenHandler<PreviewWid
         editorWidget.disposed.connect(() => syncDisposables.dispose());
 
         const editor = editorWidget.editor;
-        syncDisposables.push(editor.onCursorPositionChanged(debounce(position => this.revealSourceLineInPreview(previewWidget!, position)), 100));
+        syncDisposables.push(editor.onScrollChanged(debounce(() => {
+            if (this.scrollSyncLockOn === 'editor') {
+                // avoid recursive scroll synchronization
+                return;
+            }
+            this.lockScrollSync('preview');
+            const range = editor.getVisibleRanges();
+            if (range.length > 0) {
+                this.revealSourceLineInPreview(previewWidget!, range[0].start);
+            }
+        }), 100));
         syncDisposables.push(this.synchronizeScrollToEditor(previewWidget, editor));
 
         this.synchronizedUris.add(uri);
@@ -118,7 +138,12 @@ export class PreviewContribution extends NavigatableWidgetOpenHandler<PreviewWid
 
     protected synchronizeScrollToEditor(previewWidget: PreviewWidget, editor: TextEditor): Disposable {
         return previewWidget.onDidScroll(sourceLine => {
+            if (this.scrollSyncLockOn === 'preview') {
+                // avoid recursive scroll synchronization
+                return;
+            }
             const line = Math.floor(sourceLine);
+            this.lockScrollSync('editor'); // avoid recursive scroll synchronization
             editor.revealRange({
                 start: {
                     line,
@@ -132,19 +157,14 @@ export class PreviewContribution extends NavigatableWidgetOpenHandler<PreviewWid
         });
     }
 
-    protected registerOpenOnDoubleClick(previewWidget: PreviewWidget): void {
-        const disposable = previewWidget.onDidDoubleClick(async location => {
-            const ref = this.findWidgetInMainAreaToAddAfter();
-            const { editor } = await this.editorManager.open(new URI(location.uri), {
-                widgetOptions: ref ?
-                    { area: 'main', mode: 'tab-after', ref } :
-                    { area: 'main', mode: 'split-left' }
-            });
+    protected registerOpenOnDoubleClick(ref: PreviewWidget): void {
+        const disposable = ref.onDidDoubleClick(async location => {
+            const { editor } = await this.openSource(ref);
             editor.revealPosition(location.range.start);
             editor.selection = location.range;
-            previewWidget.revealForSourceLine(location.range.start.line);
+            ref.revealForSourceLine(location.range.start.line);
         });
-        previewWidget.disposed.connect(() => disposable.dispose());
+        ref.disposed.connect(() => disposable.dispose());
     }
 
     canHandle(uri: URI): number {
@@ -174,82 +194,81 @@ export class PreviewContribution extends NavigatableWidgetOpenHandler<PreviewWid
     }
 
     protected async resolveOpenerOptions(options?: PreviewOpenerOptions): Promise<PreviewOpenerOptions> {
-        if (!options) {
-            const ref = this.findWidgetInMainAreaToAddAfter();
+        const resolved: PreviewOpenerOptions = { mode: 'activate', ...options };
+        if (resolved.originUri) {
+            const ref = await this.getWidget(resolved.originUri);
             if (ref) {
-                return { ...this.defaultOpenOptions, widgetOptions: { area: 'main', mode: 'tab-after', ref } };
-            }
-            return this.defaultOpenOptions;
-        }
-        if (options.originUri) {
-            const ref = await this.getWidget(options.originUri);
-            if (ref) {
-                return { ...this.defaultOpenOptions, widgetOptions: { area: 'main', mode: 'tab-after', ref } };
+                resolved.widgetOptions = { ...resolved.widgetOptions, ref };
             }
         }
-        return { ...this.defaultOpenOptions, ...options };
-    }
-
-    protected findWidgetInMainAreaToAddAfter(): Widget | undefined {
-        const mainTabBars = this.shell.mainAreaTabBars;
-        const defaultTabBar = this.shell.getTabBarFor('main');
-        if (mainTabBars.length > 1 && defaultTabBar) {
-            const currentTabBar = this.shell.currentTabBar || defaultTabBar;
-            const currentIndex = currentTabBar.currentIndex;
-            const currentTitle = currentTabBar.titles[currentIndex];
-            if (currentTitle) {
-                return currentTitle.owner;
-            }
-        }
-        return undefined;
+        return resolved;
     }
 
     registerCommands(registry: CommandRegistry): void {
-        registry.registerCommand(PreviewCommands.OPEN, <CommandHandler>{
-            execute: () => this.openForEditor(),
-            isEnabled: () => this.canHandleEditorUri(),
-            isVisible: () => this.canHandleEditorUri(),
+        registry.registerCommand(PreviewCommands.OPEN, {
+            execute: widget => this.openForEditor(widget),
+            isEnabled: widget => this.canHandleEditorUri(widget),
+            isVisible: widget => this.canHandleEditorUri(widget)
+        });
+        registry.registerCommand(PreviewCommands.OPEN_SOURCE, {
+            execute: widget => this.openSource(widget),
+            isEnabled: widget => widget instanceof PreviewWidget,
+            isVisible: widget => widget instanceof PreviewWidget
         });
     }
 
     registerMenus(menus: MenuModelRegistry): void {
         menus.registerMenuAction(EditorContextMenu.NAVIGATION, {
-            commandId: PreviewCommands.OPEN.id,
-            label: 'Open Preview',
+            commandId: PreviewCommands.OPEN.id
         });
     }
 
     registerToolbarItems(registry: TabBarToolbarRegistry): void {
         registry.registerItem({
             id: PreviewCommands.OPEN.id,
-            command: PreviewCommands.OPEN,
-            isVisible: (widget: Widget) => widget instanceof EditorWidget && this.canHandleEditorUri(),
-            text: '$(columns)',
+            command: PreviewCommands.OPEN.id,
             tooltip: 'Open Preview to the Side'
+        });
+        registry.registerItem({
+            id: PreviewCommands.OPEN_SOURCE.id,
+            command: PreviewCommands.OPEN_SOURCE.id,
+            tooltip: 'Open Source'
         });
     }
 
-    protected canHandleEditorUri(): boolean {
-        const uri = this.getCurrentEditorUri();
+    protected canHandleEditorUri(widget?: Widget): boolean {
+        const uri = this.getCurrentEditorUri(widget);
         return !!uri && this.previewHandlerProvider.canHandle(uri);
     }
-    protected getCurrentEditorUri(): URI | undefined {
-        const current = this.editorManager.currentEditor;
+
+    protected getCurrentEditorUri(widget?: Widget): URI | undefined {
+        const current = this.getCurrentEditor(widget);
         return current && current.editor.uri;
     }
 
-    protected async openForEditor(): Promise<void> {
-        const uri = this.getCurrentEditorUri();
-        if (!uri) {
+    protected getCurrentEditor(widget?: Widget): EditorWidget | undefined {
+        const current = widget ? widget : this.editorManager.currentEditor;
+        return current instanceof EditorWidget && current || undefined;
+    }
+
+    protected async openForEditor(widget?: Widget): Promise<void> {
+        const ref = this.getCurrentEditor(widget);
+        if (!ref) {
             return;
         }
-        const ref = this.findWidgetInMainAreaToAddAfter();
-        await this.open(uri, {
-            ... this.defaultOpenFromEditorOptions,
-            widgetOptions: ref ?
-                { area: 'main', mode: 'tab-after', ref } :
-                { area: 'main', mode: 'split-right' }
+        await this.open(ref.editor.uri, {
+            mode: 'reveal',
+            widgetOptions: { ref, mode: 'open-to-right' }
         });
+    }
+
+    protected async openSource(ref: PreviewWidget): Promise<EditorWidget>;
+    protected async openSource(ref?: Widget): Promise<EditorWidget | undefined> {
+        if (ref instanceof PreviewWidget) {
+            return this.editorManager.open(ref.uri, {
+                widgetOptions: { ref, mode: 'open-to-left' }
+            });
+        }
     }
 
 }

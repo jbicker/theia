@@ -146,9 +146,9 @@ export class MiniBrowserEndpoint implements BackendApplicationContribution, Mini
         return this.fileSystem.resolveContent(uri);
     }
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     protected errorHandler(): (error: any, uri: string, response: Response) => MaybePromise<Response> {
-        // tslint:disable-next-line:no-any
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return async (error: any, uri: string, response: Response) => {
             const details = error.toString ? error.toString() : error;
             this.logger.error(`Error occurred while handling request for ${uri}. Details: ${details}`);
@@ -180,9 +180,10 @@ export class MiniBrowserEndpoint implements BackendApplicationContribution, Mini
             const mimeType = lookup(FileUri.fsPath(stat.uri));
             if (!mimeType) {
                 this.logger.warn(`Cannot handle unexpected resource. URI: ${statWithContent.stat.uri}.`);
-                return response.send();
+                response.contentType('application/octet-stream');
+            } else {
+                response.contentType(mimeType);
             }
-            response.contentType(mimeType);
             return response.send(content);
         };
     }
@@ -198,13 +199,13 @@ const CODE_EDITOR_PRIORITY = 100;
 @injectable()
 export class HtmlHandler implements MiniBrowserEndpointHandler {
 
-    supportedExtensions(): string {
-        return 'html';
+    supportedExtensions(): string[] {
+        return ['html', 'xhtml', 'htm'];
     }
 
     priority(): number {
         // Prefer Code Editor over Mini Browser
-        // https://github.com/theia-ide/theia/issues/2051
+        // https://github.com/eclipse-theia/theia/issues/2051
         return 1;
     }
 
@@ -292,7 +293,7 @@ export class SvgHandler implements MiniBrowserEndpointHandler {
     }
 
     priority(): number {
-        return CODE_EDITOR_PRIORITY + 1;
+        return 1;
     }
 
     respond(statWithContent: FileStatWithContent, response: Response): MaybePromise<Response> {

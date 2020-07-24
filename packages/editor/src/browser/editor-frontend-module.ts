@@ -14,15 +14,17 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+import '../../src/browser/style/index.css';
+
 import { ContainerModule } from 'inversify';
 import { CommandContribution, MenuContribution } from '@theia/core/lib/common';
-import { OpenHandler, WidgetFactory, FrontendApplicationContribution, KeybindingContext, KeybindingContribution } from '@theia/core/lib/browser';
+import { OpenHandler, WidgetFactory, FrontendApplicationContribution, KeybindingContext, KeybindingContribution, QuickOpenContribution } from '@theia/core/lib/browser';
 import { VariableContribution } from '@theia/variable-resolver/lib/browser';
-import { EditorManager } from './editor-manager';
+import { EditorManager, EditorAccess, ActiveEditorAccess, CurrentEditorAccess } from './editor-manager';
 import { EditorContribution } from './editor-contribution';
 import { EditorMenuContribution } from './editor-menu';
 import { EditorCommandContribution } from './editor-command';
-import { EditorTextFocusContext, StrictEditorTextFocusContext } from './editor-keybinding-contexts';
+import { EditorTextFocusContext, StrictEditorTextFocusContext, DiffEditorTextFocusContext } from './editor-keybinding-contexts';
 import { EditorKeybindingContribution } from './editor-keybinding';
 import { bindEditorPreferences } from './editor-preferences';
 import { EditorWidgetFactory } from './editor-widget-factory';
@@ -32,22 +34,29 @@ import { NavigationLocationService } from './navigation/navigation-location-serv
 import { NavigationLocationSimilarity } from './navigation/navigation-location-similarity';
 import { EditorVariableContribution } from './editor-variable-contribution';
 import { SemanticHighlightingService } from './semantic-highlight/semantic-highlighting-service';
+import { EditorQuickOpenService } from './editor-quick-open-service';
 
 export default new ContainerModule(bind => {
     bindEditorPreferences(bind);
 
-    bind(WidgetFactory).to(EditorWidgetFactory).inSingletonScope();
+    bind(EditorWidgetFactory).toSelf().inSingletonScope();
+    bind(WidgetFactory).toService(EditorWidgetFactory);
 
     bind(EditorManager).toSelf().inSingletonScope();
     bind(OpenHandler).toService(EditorManager);
 
-    bind(CommandContribution).to(EditorCommandContribution).inSingletonScope();
-    bind(MenuContribution).to(EditorMenuContribution).inSingletonScope();
+    bind(EditorCommandContribution).toSelf().inSingletonScope();
+    bind(CommandContribution).toService(EditorCommandContribution);
+
+    bind(EditorMenuContribution).toSelf().inSingletonScope();
+    bind(MenuContribution).toService(EditorMenuContribution);
 
     bind(StrictEditorTextFocusContext).toSelf().inSingletonScope();
     bind(KeybindingContext).toService(StrictEditorTextFocusContext);
     bind(KeybindingContext).to(EditorTextFocusContext).inSingletonScope();
-    bind(KeybindingContribution).to(EditorKeybindingContribution).inSingletonScope();
+    bind(KeybindingContext).to(DiffEditorTextFocusContext).inSingletonScope();
+    bind(EditorKeybindingContribution).toSelf().inSingletonScope();
+    bind(KeybindingContribution).toService(EditorKeybindingContribution);
 
     bind(EditorContribution).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(EditorContribution);
@@ -61,4 +70,14 @@ export default new ContainerModule(bind => {
     bind(VariableContribution).to(EditorVariableContribution).inSingletonScope();
 
     bind(SemanticHighlightingService).toSelf().inSingletonScope();
+
+    [CommandContribution, KeybindingContribution, QuickOpenContribution].forEach(serviceIdentifier => {
+        bind(serviceIdentifier).toService(EditorContribution);
+    });
+    bind(EditorQuickOpenService).toSelf().inSingletonScope();
+
+    bind(CurrentEditorAccess).toSelf().inSingletonScope();
+    bind(ActiveEditorAccess).toSelf().inSingletonScope();
+    bind(EditorAccess).to(CurrentEditorAccess).inSingletonScope().whenTargetNamed(EditorAccess.CURRENT);
+    bind(EditorAccess).to(ActiveEditorAccess).inSingletonScope().whenTargetNamed(EditorAccess.ACTIVE);
 });

@@ -14,12 +14,26 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { inject, injectable } from 'inversify';
+import { inject, injectable, named } from 'inversify';
 import { MonacoToProtocolConverter, ProtocolToMonacoConverter } from 'monaco-languageclient';
 import URI from '@theia/core/lib/common/uri';
-import { ResourceProvider, ReferenceCollection, Event } from '@theia/core';
+import { ResourceProvider, ReferenceCollection, Event, MaybePromise, Resource, ContributionProvider } from '@theia/core';
 import { EditorPreferences, EditorPreferenceChange } from '@theia/editor/lib/browser';
 import { MonacoEditorModel } from './monaco-editor-model';
+import IReference = monaco.editor.IReference;
+export { IReference };
+
+export const MonacoEditorModelFactory = Symbol('MonacoEditorModelFactory');
+export interface MonacoEditorModelFactory {
+
+    readonly scheme: string;
+
+    createModel(
+        resource: Resource,
+        options?: { encoding?: string | undefined }
+    ): MaybePromise<MonacoEditorModel>;
+
+}
 
 @injectable()
 export class MonacoTextModelService implements monaco.editor.ITextModelService {
@@ -40,6 +54,10 @@ export class MonacoTextModelService implements monaco.editor.ITextModelService {
     @inject(ProtocolToMonacoConverter)
     protected readonly p2m: ProtocolToMonacoConverter;
 
+    @inject(ContributionProvider)
+    @named(MonacoEditorModelFactory)
+    protected readonly factories: ContributionProvider<MonacoEditorModelFactory>;
+
     get models(): MonacoEditorModel[] {
         return this._models.values();
     }
@@ -52,49 +70,66 @@ export class MonacoTextModelService implements monaco.editor.ITextModelService {
         return this._models.onDidCreate;
     }
 
-    createModelReference(raw: monaco.Uri | URI): monaco.Promise<monaco.editor.IReference<MonacoEditorModel>> {
-        return monaco.Promise.wrap(this._models.acquire(raw.toString()));
+    createModelReference(raw: monaco.Uri | URI): Promise<IReference<MonacoEditorModel>> {
+        return this._models.acquire(raw.toString());
     }
 
     protected async loadModel(uri: URI): Promise<MonacoEditorModel> {
         await this.editorPreferences.ready;
         const resource = await this.resourceProvider(uri);
-        const model = await (new MonacoEditorModel(resource, this.m2p, this.p2m).load());
-        model.autoSave = this.editorPreferences['editor.autoSave'];
-        model.autoSaveDelay = this.editorPreferences['editor.autoSaveDelay'];
-        model.textEditorModel.updateOptions(this.getModelOptions());
+        const model = await (await this.createModel(resource)).load();
+        this.updateModel(model);
+        model.textEditorModel.onDidChangeLanguage(() => this.updateModel(model));
         const disposable = this.editorPreferences.onPreferenceChanged(change => this.updateModel(model, change));
         model.onDispose(() => disposable.dispose());
         return model;
     }
 
-    protected readonly modelOptions: {
-        [name: string]: (keyof monaco.editor.ITextModelUpdateOptions | undefined)
-    } = {
-            'editor.tabSize': 'tabSize',
-            'editor.insertSpaces': 'insertSpaces'
-        };
+    protected createModel(resource: Resource): MaybePromise<MonacoEditorModel> {
+        const options = { encoding: this.editorPreferences.get('files.encoding') };
+        const factory = this.factories.getContributions().find(({ scheme }) => resource.uri.scheme === scheme);
+        return factory ? factory.createModel(resource, options) : new MonacoEditorModel(resource, this.m2p, this.p2m, options);
+    }
 
-    protected updateModel(model: MonacoEditorModel, change: EditorPreferenceChange): void {
-        if (change.preferenceName === 'editor.autoSave') {
-            model.autoSave = this.editorPreferences['editor.autoSave'];
-        }
-        if (change.preferenceName === 'editor.autoSaveDelay') {
-            model.autoSaveDelay = this.editorPreferences['editor.autoSaveDelay'];
-        }
-        const modelOption = this.modelOptions[change.preferenceName];
-        if (modelOption) {
-            const options: monaco.editor.ITextModelUpdateOptions = {};
-            // tslint:disable-next-line:no-any
-            options[modelOption] = change.newValue as any;
-            model.textEditorModel.updateOptions(options);
+    protected readonly modelOptions: { [name: string]: (keyof monaco.editor.ITextModelUpdateOptions | undefined) } = {
+        'editor.tabSize': 'tabSize',
+        'editor.insertSpaces': 'insertSpaces'
+    };
+
+    protected updateModel(model: MonacoEditorModel, change?: EditorPreferenceChange): void {
+        if (change) {
+            if (!change.affects(model.uri, model.languageId)) {
+                return;
+            }
+            if (change.preferenceName === 'editor.autoSave') {
+                model.autoSave = this.editorPreferences.get('editor.autoSave', undefined, model.uri);
+            }
+            if (change.preferenceName === 'editor.autoSaveDelay') {
+                model.autoSaveDelay = this.editorPreferences.get('editor.autoSaveDelay', undefined, model.uri);
+            }
+            const modelOption = this.modelOptions[change.preferenceName];
+            if (modelOption) {
+                const options: monaco.editor.ITextModelUpdateOptions = {};
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                options[modelOption] = change.newValue as any;
+                model.textEditorModel.updateOptions(options);
+            }
+        } else {
+            model.autoSave = this.editorPreferences.get('editor.autoSave', undefined, model.uri);
+            model.autoSaveDelay = this.editorPreferences.get('editor.autoSaveDelay', undefined, model.uri);
+            model.textEditorModel.updateOptions(this.getModelOptions(model));
         }
     }
 
-    protected getModelOptions(): monaco.editor.ITextModelUpdateOptions {
+    /** @deprecated pass MonacoEditorModel instead  */
+    protected getModelOptions(uri: string): monaco.editor.ITextModelUpdateOptions;
+    protected getModelOptions(model: MonacoEditorModel): monaco.editor.ITextModelUpdateOptions;
+    protected getModelOptions(arg: string | MonacoEditorModel): monaco.editor.ITextModelUpdateOptions {
+        const uri = typeof arg === 'string' ? arg : arg.uri;
+        const overrideIdentifier = typeof arg === 'string' ? undefined : arg.languageId;
         return {
-            tabSize: this.editorPreferences['editor.tabSize'],
-            insertSpaces: this.editorPreferences['editor.insertSpaces']
+            tabSize: this.editorPreferences.get({ preferenceName: 'editor.tabSize', overrideIdentifier }, undefined, uri),
+            insertSpaces: this.editorPreferences.get({ preferenceName: 'editor.insertSpaces', overrideIdentifier }, undefined, uri)
         };
     }
 

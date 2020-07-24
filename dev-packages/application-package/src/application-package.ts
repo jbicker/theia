@@ -14,16 +14,16 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import * as fs from 'fs-extra';
 import * as paths from 'path';
 import { readJsonFile, writeJsonFile } from './json-file';
 import { NpmRegistry, NodePackage, PublishedNodePackage, sortByKey } from './npm-registry';
 import { Extension, ExtensionPackage, RawExtensionPackage } from './extension-package';
 import { ExtensionPackageCollector } from './extension-package-collector';
 import { ApplicationProps } from './application-props';
-import { environment } from './environment';
 
-// tslint:disable-next-line:no-any
+// tslint:disable:no-implicit-dependencies
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ApplicationLog = (message?: any, ...optionalParams: any[]) => void;
 export class ApplicationPackageOptions {
     readonly projectPath: string;
@@ -46,6 +46,14 @@ export class ApplicationPackage {
         this.projectPath = options.projectPath;
         this.log = options.log || console.log.bind(console);
         this.error = options.error || console.error.bind(console);
+        if (this.isElectron()) {
+            const { version } = require('../package.json');
+            try {
+                require.resolve('@theia/electron/package.json', { paths: [this.projectPath] });
+            } catch {
+                console.warn(`please install @theia/electron@${version} as a runtime dependency`);
+            }
+        }
     }
 
     protected _registry: NpmRegistry | undefined;
@@ -71,6 +79,12 @@ export class ApplicationPackage {
 
         if (this.options.appTarget) {
             theia.target = this.options.appTarget;
+        }
+
+        if (theia.target && !(theia.target in ApplicationProps.ApplicationTarget)) {
+            const defaultTarget = ApplicationProps.ApplicationTarget.browser;
+            console.warn(`Unknown application target '${theia.target}', '${defaultTarget}' to be used instead`);
+            theia.target = defaultTarget;
         }
 
         return this._props = { ...ApplicationProps.DEFAULT, ...theia };
@@ -109,7 +123,7 @@ export class ApplicationPackage {
     }
 
     async findExtensionPackage(extension: string): Promise<ExtensionPackage | undefined> {
-        return this.getExtensionPackage(extension) || await this.resolveExtensionPackage(extension);
+        return this.getExtensionPackage(extension) || this.resolveExtensionPackage(extension);
     }
 
     async resolveExtensionPackage(extension: string): Promise<ExtensionPackage | undefined> {
@@ -197,11 +211,11 @@ export class ApplicationPackage {
     }
 
     isBrowser(): boolean {
-        return this.target === 'browser';
+        return this.target === ApplicationProps.ApplicationTarget.browser;
     }
 
     isElectron(): boolean {
-        return this.target === 'electron';
+        return this.target === ApplicationProps.ApplicationTarget.electron;
     }
 
     ifBrowser<T>(value: T): T | undefined;
@@ -251,16 +265,8 @@ export class ApplicationPackage {
      */
     get resolveModule(): ApplicationModuleResolver {
         if (!this._moduleResolver) {
-            // If running a bundled electron application, we cannot create a file for the module on the fly.
-            // https://github.com/theia-ide/theia/issues/2992
-            if (environment.electron.is() && !environment.electron.isDevMode()) {
-                this._moduleResolver = modulePath => require.resolve(modulePath);
-            } else {
-                const loaderPath = this.path('.application-module-loader.js');
-                fs.writeFileSync(loaderPath, 'module.exports = modulePath => require.resolve(modulePath);');
-                this._moduleResolver = require(loaderPath) as ApplicationModuleResolver;
-                fs.removeSync(loaderPath);
-            }
+            const resolutionPaths = [this.packagePath || process.cwd()];
+            this._moduleResolver = modulePath => require.resolve(modulePath, { paths: resolutionPaths });
         }
         return this._moduleResolver!;
     }

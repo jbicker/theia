@@ -13,60 +13,70 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
-import {interfaces} from 'inversify';
+import { interfaces } from 'inversify';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import * as types from '../../plugin/types-impl';
-import {StatusBarMessageRegistryMain} from '../../api/plugin-api';
-import {StatusBar, StatusBarAlignment} from '@theia/core/lib/browser/status-bar/status-bar';
+import { StatusBarMessageRegistryMain } from '../../common/plugin-api-rpc';
+import { StatusBar, StatusBarAlignment, StatusBarEntry } from '@theia/core/lib/browser/status-bar/status-bar';
+import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
 
-const STATUS_BAR_MESSAGE_PRE = 'status-bar-entry';
+export class StatusBarMessageRegistryMainImpl implements StatusBarMessageRegistryMain, Disposable {
+    private readonly delegate: StatusBar;
+    private readonly entries = new Map<string, StatusBarEntry>();
+    private readonly toDispose = new DisposableCollection(
+        Disposable.create(() => { /* mark as not disposed */ })
+    );
 
-export class StatusBarMessageRegistryMainImpl implements StatusBarMessageRegistryMain {
-    private delegate: StatusBar;
-
-    private ids: string[] = [];
+    protected readonly colorRegistry: ColorRegistry;
 
     constructor(container: interfaces.Container) {
         this.delegate = container.get(StatusBar);
+        this.colorRegistry = container.get(ColorRegistry);
     }
 
-    $setMessage(text: string,
-                priority: number,
-                alignment: number,
-                color: string | undefined,
-                tooltip: string | undefined,
-                command: string | undefined): PromiseLike<string> {
-        const id = this.uniqueId;
-        this.ids.push(id);
+    dispose(): void {
+        this.toDispose.dispose();
+    }
 
+    async $setMessage(id: string,
+        text: string | undefined,
+        priority: number,
+        alignment: number,
+        color: string | undefined,
+        tooltip: string | undefined,
+        command: string | undefined): Promise<void> {
         const entry = {
-            text,
+            text: text || '',
             priority,
             alignment: alignment === types.StatusBarAlignment.Left ? StatusBarAlignment.LEFT : StatusBarAlignment.RIGHT,
-            color,
+            color: color && (this.colorRegistry.getCurrentColor(color) || color),
             tooltip,
             command
         };
 
-        return this.delegate.setElement(id, entry).then(() => Promise.resolve(id));
+        this.entries.set(id, entry);
+        await this.delegate.setElement(id, entry);
+        if (this.toDispose.disposed) {
+            this.$dispose(id);
+        } else {
+            this.toDispose.push(Disposable.create(() => this.$dispose(id)));
+        }
+    }
+
+    $update(id: string, message: string): void {
+        const entry = this.entries.get(id);
+        if (entry) {
+            entry.text = message;
+            this.delegate.setElement(id, entry);
+        }
     }
 
     $dispose(id: string): void {
-        this.delegate.removeElement(id).then(() => {
-            const index = this.ids.indexOf(id);
-            if (index > -1) {
-                this.ids.splice(index, 1);
-            }
-        });
+        const entry = this.entries.get(id);
+        if (entry) {
+            this.entries.delete(id);
+            this.delegate.removeElement(id);
+        }
     }
 
-    private get uniqueId(): string {
-        let extensionId = STATUS_BAR_MESSAGE_PRE;
-        for (let counter = 0; counter < 100; counter++) {
-            extensionId = `${STATUS_BAR_MESSAGE_PRE}_id_${('0000' + (Math.random() * Math.pow(36, 4) << 0).toString(36)).slice(-4)}`;
-            if (this.ids.indexOf(extensionId) === -1) {
-                break;
-            }
-        }
-        return extensionId;
-    }
 }

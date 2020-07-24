@@ -119,6 +119,25 @@ export namespace GitFileStatus {
      */
     export const toAbbreviation = (status: GitFileStatus, staged?: boolean): string => GitFileStatus.toString(status, staged).charAt(0);
 
+    /**
+     * It should be aligned with https://github.com/microsoft/vscode/blob/0dfa355b3ad185a6289ba28a99c141ab9e72d2be/extensions/git/src/repository.ts#L197
+     */
+    export function getColor(status: GitFileStatus, staged?: boolean): string {
+        switch (status) {
+            case GitFileStatus.New: {
+                if (!staged) {
+                    return 'var(--theia-gitDecoration-untrackedResourceForeground)';
+                }
+                return 'var(--theia-gitDecoration-addedResourceForeground)';
+            }
+            case GitFileStatus.Renamed: return 'var(--theia-gitDecoration-untrackedResourceForeground)';
+            case GitFileStatus.Copied: // Fall through.
+            case GitFileStatus.Modified: return 'var(--theia-gitDecoration-modifiedResourceForeground)';
+            case GitFileStatus.Deleted: return 'var(--theia-gitDecoration-deletedResourceForeground)';
+            case GitFileStatus.Conflicted: return 'var(--theia-gitDecoration-conflictingResourceForeground)';
+        }
+    }
+
 }
 
 /**
@@ -142,7 +161,7 @@ export interface GitFileChange {
     readonly oldUri?: string;
 
     /**
-     * `true` if the file is staged, otherwise `false`. If absent, it means, not staged.
+     * `true` if the file is staged or committed, `false` if not staged. If absent, it means not staged.
      */
     readonly staged?: boolean;
 
@@ -184,11 +203,32 @@ export namespace Repository {
     export function is(repository: Object | undefined): repository is Repository {
         return !!repository && 'localUri' in repository;
     }
-    export function relativePath(repository: Repository | string, uri: URI | string): Path {
-        const repositoryUri = new URI(Repository.is(repository) ? repository.localUri : repository);
-        return new Path(uri.toString().substr(repositoryUri.toString().length + 1));
+    export function relativePath(repository: Repository | URI, uri: URI | string): Path | undefined {
+        const repositoryUri = new URI(Repository.is(repository) ? repository.localUri : String(repository));
+        return repositoryUri.relative(new URI(String(uri)));
     }
-    export const sortComparator = (ra: Repository, rb: Repository) => rb.localUri.length - ra.localUri.length;
+}
+
+/**
+ * Representation of a Git remote.
+ */
+export interface Remote {
+
+    /**
+     * The name of the remote.
+     */
+    readonly name: string,
+
+    /**
+     * The remote fetch url.
+     */
+    readonly fetch: string,
+
+    /**
+     * The remote git url.
+     */
+    readonly push: string,
+
 }
 
 /**
@@ -301,12 +341,12 @@ export interface Commit {
 export interface CommitWithChanges extends Commit {
 
     /**
-     * The date when the commit was authored.
+     * The date when the commit was authored (ISO format).
      */
     readonly authorDateRelative: string;
 
     /**
-     * The number of file changes per commit.
+     * The file changes in the commit.
      */
     readonly fileChanges: GitFileChange[];
 }
@@ -353,6 +393,14 @@ export interface GitResult {
      */
     readonly exitCode: number;
 
+}
+
+/**
+ * StashEntry
+ */
+export interface StashEntry {
+    readonly id: string;
+    readonly message: string;
 }
 
 /**

@@ -13,8 +13,8 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
-
-// tslint:disable:no-any
+import { TaskIdentifier } from '@theia/task/lib/common';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 export type DebugViewLocation = 'default' | 'left' | 'right' | 'bottom';
 
@@ -38,6 +38,11 @@ export interface DebugConfiguration {
     [key: string]: any;
 
     /**
+     * The request type of the debug adapter session.
+     */
+    request: string;
+
+    /**
      * If noDebug is true the launch request should launch the program without enabling debugging.
      */
     noDebug?: boolean;
@@ -57,9 +62,15 @@ export interface DebugConfiguration {
 
     /** default: neverOpen */
     internalConsoleOptions?: 'neverOpen' | 'openOnSessionStart' | 'openOnFirstSessionStart'
+
+    /** Task to run before debug session starts */
+    preLaunchTask?: string | TaskIdentifier;
+
+    /** Task to run after debug session ends */
+    postDebugTask?: string | TaskIdentifier;
 }
 export namespace DebugConfiguration {
     export function is(arg: DebugConfiguration | any): arg is DebugConfiguration {
-        return !!arg && 'type' in arg && 'name' in arg;
+        return !!arg && typeof arg === 'object' && 'type' in arg && 'name' in arg && 'request' in arg;
     }
 }

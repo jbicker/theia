@@ -15,21 +15,11 @@
  ********************************************************************************/
 
 import { injectable, inject } from 'inversify';
-import { KeybindingContribution, KeybindingRegistry, Key, KeyCode, Keystroke, KeyModifier } from '@theia/core/lib/browser';
-import { EditorKeybindingContexts } from '@theia/editor/lib/browser';
+import { KeybindingContribution, KeybindingRegistry } from '@theia/core/lib/browser';
 import { MonacoCommands } from './monaco-command';
 import { MonacoCommandRegistry } from './monaco-command-registry';
-import { KEY_CODE_MAP } from './monaco-keycode-map';
-import KeybindingsRegistry = monaco.keybindings.KeybindingsRegistry;
-
-function monaco2BrowserKeyCode(keyCode: monaco.KeyCode): number {
-    for (let i = 0; i < KEY_CODE_MAP.length; i++) {
-        if (KEY_CODE_MAP[i] === keyCode) {
-            return i;
-        }
-    }
-    return -1;
-}
+import { environment } from '@theia/core';
+import { MonacoResolvedKeybinding } from './monaco-resolved-keybinding';
 
 @injectable()
 export class MonacoKeybindingContribution implements KeybindingContribution {
@@ -38,58 +28,19 @@ export class MonacoKeybindingContribution implements KeybindingContribution {
     protected readonly commands: MonacoCommandRegistry;
 
     registerKeybindings(registry: KeybindingRegistry): void {
-        for (const item of KeybindingsRegistry.getDefaultKeybindings()) {
+        const defaultKeybindings = monaco.keybindings.KeybindingsRegistry.getDefaultKeybindings();
+        for (const item of defaultKeybindings) {
             const command = this.commands.validate(item.command);
             if (command) {
-                const raw = item.keybinding;
-                if (raw.type === monaco.keybindings.KeybindingType.Simple) {
-                    let keybinding = raw as monaco.keybindings.SimpleKeybinding;
-                    // TODO: remove this temporary workaround after updating to monaco including the fix for https://github.com/Microsoft/vscode/issues/49225
-                    if (command === 'monaco.editor.action.refactor') {
-                        if (monaco.platform.OS !== monaco.platform.OperatingSystem.Macintosh) {
-                            keybinding = { ...keybinding, ctrlKey: true, metaKey: false };
-                        }
-                    }
-                    registry.registerKeybinding({
-                        command,
-                        keybinding: this.keyCode(keybinding).toString(),
-                        context: EditorKeybindingContexts.editorTextFocus
-                    });
+                const when = item.when && item.when.serialize();
+                let keybinding;
+                if (item.command === MonacoCommands.GO_TO_DEFINITION && !environment.electron.is()) {
+                    keybinding = 'ctrlcmd+f11';
                 } else {
-                    // FIXME support chord keybindings properly, KeyCode does not allow it right now
+                    keybinding = MonacoResolvedKeybinding.toKeybinding(item.keybinding);
                 }
+                registry.registerKeybinding({ command, keybinding, when });
             }
         }
-
-        // `Select All` is not an editor action just like everything else.
-        const selectAllCommand = this.commands.validate(MonacoCommands.SELECTION_SELECT_ALL);
-        if (selectAllCommand) {
-            registry.registerKeybinding({
-                command: selectAllCommand,
-                keybinding: 'ctrlcmd+a',
-                context: EditorKeybindingContexts.editorTextFocus
-            });
-        }
-    }
-
-    protected keyCode(keybinding: monaco.keybindings.SimpleKeybinding): KeyCode {
-        const keyCode = keybinding.keyCode;
-        const sequence: Keystroke = {
-            first: Key.getKey(monaco2BrowserKeyCode(keyCode & 255)),
-            modifiers: []
-        };
-        if (keybinding.ctrlKey) {
-            sequence.modifiers!.push(KeyModifier.CtrlCmd);
-        }
-        if (keybinding.shiftKey) {
-            sequence.modifiers!.push(KeyModifier.Shift);
-        }
-        if (keybinding.altKey) {
-            sequence.modifiers!.push(KeyModifier.Alt);
-        }
-        if (keybinding.metaKey) {
-            sequence.modifiers!.push(KeyModifier.MacCtrl);
-        }
-        return KeyCode.createKeyCode(sequence);
     }
 }

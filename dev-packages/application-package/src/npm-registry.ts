@@ -14,7 +14,7 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-// tslint:disable:no-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as request from 'request';
 const ChangesStream = require('changes-stream');
 import { NpmRegistryProps } from './application-props';
@@ -71,7 +71,9 @@ export interface ViewResult {
     [key: string]: any
 }
 
-export function sortByKey(object: { [key: string]: any }) {
+export function sortByKey(object: { [key: string]: any }): {
+    [key: string]: any;
+} {
     return Object.keys(object).sort().reduce((sorted, key) => {
         sorted[key] = object[key];
         return sorted;
@@ -101,7 +103,7 @@ export class NpmRegistry {
         this.resetIndex();
     }
 
-    updateProps(props?: Partial<NpmRegistryProps>) {
+    updateProps(props?: Partial<NpmRegistryProps>): void {
         const oldRegistry = this.props.registry;
         Object.assign(this.props, props);
         const newRegistry = this.props.registry;

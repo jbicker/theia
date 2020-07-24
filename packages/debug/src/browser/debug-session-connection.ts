@@ -14,21 +14,20 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-// tslint:disable:no-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { WebSocketConnectionProvider } from '@theia/core/lib/browser';
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { Deferred } from '@theia/core/lib/common/promise-util';
-import { Emitter, Event, DisposableCollection, Disposable } from '@theia/core';
-import { WebSocketChannel } from '@theia/core/lib/common/messaging/web-socket-channel';
-import { DebugAdapterPath } from '../common/debug-service';
+import { Event, Emitter, DisposableCollection, Disposable, MaybePromise } from '@theia/core';
+import { OutputChannel } from '@theia/output/lib/common/output-channel';
+import { IWebSocket } from 'vscode-ws-jsonrpc/lib/socket/socket';
 
 export interface DebugExitEvent {
     code?: number
     reason?: string | Error
 }
 
-export type DebugRequestHandler = (request: DebugProtocol.Request) => any;
+export type DebugRequestHandler = (request: DebugProtocol.Request) => MaybePromise<any>;
 
 export interface DebugRequestTypes {
     'attach': [DebugProtocol.AttachRequestArguments, DebugProtocol.AttachResponse]
@@ -81,28 +80,43 @@ export interface DebugEventTypes {
     'terminated': DebugProtocol.TerminatedEvent
     'thread': DebugProtocol.ThreadEvent
 }
+const standardDebugEvents = new Set<string>([
+    'breakpoint',
+    'capabilities',
+    'continued',
+    'exited',
+    'initialized',
+    'loadedSource',
+    'module',
+    'output',
+    'process',
+    'stopped',
+    'terminated',
+    'thread'
+]);
 
 export class DebugSessionConnection implements Disposable {
 
     private sequence = 1;
 
     protected readonly pendingRequests = new Map<number, (response: DebugProtocol.Response) => void>();
-    protected readonly connection: Promise<WebSocketChannel>;
-
-    protected readonly onDidEventEmitter = new Emitter<DebugProtocol.Event | DebugExitEvent>();
-    readonly onDidEvent: Event<DebugProtocol.Event | DebugExitEvent> = this.onDidEventEmitter.event;
+    protected readonly connection: Promise<IWebSocket>;
 
     protected readonly requestHandlers = new Map<string, DebugRequestHandler>();
 
+    protected readonly onDidCustomEventEmitter = new Emitter<DebugProtocol.Event>();
+    readonly onDidCustomEvent: Event<DebugProtocol.Event> = this.onDidCustomEventEmitter.event;
+
     protected readonly toDispose = new DisposableCollection(
-        this.onDidEventEmitter,
+        this.onDidCustomEventEmitter,
         Disposable.create(() => this.pendingRequests.clear()),
         Disposable.create(() => this.emitters.clear())
     );
 
     constructor(
         readonly sessionId: string,
-        protected readonly connectionProvider: WebSocketConnectionProvider
+        protected readonly connectionFactory: (sessionId: string) => Promise<IWebSocket>,
+        protected readonly traceOutputChannel: OutputChannel | undefined
     ) {
         this.connection = this.createConnection();
     }
@@ -120,22 +134,18 @@ export class DebugSessionConnection implements Disposable {
         this.toDispose.dispose();
     }
 
-    protected createConnection(): Promise<WebSocketChannel> {
-        return new Promise<WebSocketChannel>(resolve =>
-            this.connectionProvider.openChannel(`${DebugAdapterPath}/${this.sessionId}`, channel => {
-                if (this.disposed) {
-                    channel.close();
-                } else {
-                    const closeChannel = this.toDispose.push(Disposable.create(() => channel.close()));
-                    channel.onClose((code, reason) => {
-                        closeChannel.dispose();
-                        this.onDidEventEmitter.fire({ code, reason });
-                    });
-                    channel.onMessage(data => this.handleMessage(data));
-                    resolve(channel);
-                }
-            }, { reconnecting: false })
-        );
+    protected async createConnection(): Promise<IWebSocket> {
+        if (this.disposed) {
+            throw new Error('Connection has been already disposed.');
+        } else {
+            const connection = await this.connectionFactory(this.sessionId);
+            connection.onClose((code, reason) => {
+                connection.dispose();
+                this.fire('exited', { code, reason });
+            });
+            connection.onMessage(data => this.handleMessage(data));
+            return connection;
+        }
     }
 
     protected allThreadsContinued = true;
@@ -157,8 +167,11 @@ export class DebugSessionConnection implements Disposable {
         }
         return result;
     }
-    protected async doSendRequest<K extends keyof DebugRequestTypes>(command: K, args: DebugRequestTypes[K][0]): Promise<DebugRequestTypes[K][1]> {
-        const result = new Deferred<DebugRequestTypes[K][1]>();
+    sendCustomRequest<T extends DebugProtocol.Response>(command: string, args?: any): Promise<T> {
+        return this.doSendRequest<T>(command, args);
+    }
+    protected async doSendRequest<K extends DebugProtocol.Response>(command: string, args?: any): Promise<K> {
+        const result = new Deferred<K>();
 
         const request: DebugProtocol.Request = {
             seq: this.sequence++,
@@ -167,7 +180,21 @@ export class DebugSessionConnection implements Disposable {
             arguments: args
         };
 
-        this.pendingRequests.set(request.seq, (response: DebugRequestTypes[K][1]) => {
+        const onDispose = this.toDispose.push(Disposable.create(() => {
+            const pendingRequest = this.pendingRequests.get(request.seq);
+            if (pendingRequest) {
+                pendingRequest({
+                    type: 'response',
+                    request_seq: request.seq,
+                    command: request.command,
+                    seq: 0,
+                    success: false,
+                    message: 'debug session is closed'
+                });
+            }
+        }));
+        this.pendingRequests.set(request.seq, (response: K) => {
+            onDispose.dispose();
             if (!response.success) {
                 result.reject(response);
             } else {
@@ -181,10 +208,17 @@ export class DebugSessionConnection implements Disposable {
 
     protected async send(message: DebugProtocol.ProtocolMessage): Promise<void> {
         const connection = await this.connection;
-        connection.send(JSON.stringify(message));
+        const messageStr = JSON.stringify(message);
+        if (this.traceOutputChannel) {
+            this.traceOutputChannel.appendLine(`${this.sessionId.substring(0, 8)} theia -> adapter: ${messageStr}`);
+        }
+        connection.send(messageStr);
     }
 
-    protected handleMessage(data: string) {
+    protected handleMessage(data: string): void {
+        if (this.traceOutputChannel) {
+            this.traceOutputChannel.appendLine(`${this.sessionId.substring(0, 8)} theia <- adapter: ${data}`);
+        }
         const message: DebugProtocol.ProtocolMessage = JSON.parse(data);
         if (message.type === 'request') {
             this.handleRequest(message as DebugProtocol.Request);
@@ -218,7 +252,7 @@ export class DebugSessionConnection implements Disposable {
         const handler = this.requestHandlers.get(request.command);
         if (handler) {
             try {
-                response.body = handler(request);
+                response.body = await handler(request);
             } catch (error) {
                 response.success = false;
                 response.message = error.message;
@@ -234,7 +268,11 @@ export class DebugSessionConnection implements Disposable {
             if (event.event === 'continued') {
                 this.allThreadsContinued = (<DebugProtocol.ContinuedEvent>event).body.allThreadsContinued === false ? false : true;
             }
-            this.fireCustom(event.event, event);
+            if (standardDebugEvents.has(event.event)) {
+                this.doFire(event.event, event);
+            } else {
+                this.onDidCustomEventEmitter.fire(event);
+            }
         } else {
             this.fire('exited', event);
         }
@@ -242,17 +280,13 @@ export class DebugSessionConnection implements Disposable {
 
     protected readonly emitters = new Map<string, Emitter<DebugProtocol.Event | DebugExitEvent>>();
     on<K extends keyof DebugEventTypes>(kind: K, listener: (e: DebugEventTypes[K]) => any): Disposable {
-        return this.onCustom(kind, listener);
-    }
-    onCustom<E extends DebugProtocol.Event>(kind: string, listener: (e: E) => any): Disposable {
         return this.getEmitter(kind).event(listener);
     }
     protected fire<K extends keyof DebugEventTypes>(kind: K, e: DebugEventTypes[K]): void {
-        this.fireCustom(kind, e);
+        this.doFire(kind, e);
     }
-    protected fireCustom<K extends keyof DebugEventTypes>(kind: string, e: DebugEventTypes[K]): void {
+    protected doFire(kind: string, e: DebugProtocol.Event | DebugExitEvent): void {
         this.getEmitter(kind).fire(e);
-        this.onDidEventEmitter.fire(e);
     }
     protected getEmitter(kind: string): Emitter<DebugProtocol.Event | DebugExitEvent> {
         const emitter = this.emitters.get(kind) || this.newEmitter();

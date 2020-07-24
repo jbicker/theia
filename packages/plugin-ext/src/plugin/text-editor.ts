@@ -13,8 +13,8 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
-import { TextEditorConfiguration, TextEditorsMain, TextEditorConfigurationUpdate, SingleEditOperation } from '../api/plugin-api';
-import { Range as ApiRange } from '../api/model';
+import { TextEditorConfiguration, TextEditorsMain, TextEditorConfigurationUpdate, SingleEditOperation } from '../common/plugin-api-rpc';
+import { Range as ApiRange } from '../common/plugin-api-rpc-model';
 import { Selection, Range, TextEditorLineNumbersStyle, SnippetString, Position, TextEditorRevealType, EndOfLine } from './types-impl';
 import * as theia from '@theia/plugin';
 import { DocumentDataExt } from './document-data';
@@ -128,12 +128,12 @@ export class TextEditorExt implements theia.TextEditor {
         throw readonly('viewColumn');
     }
 
-    _acceptViewColumn(value: theia.ViewColumn) {
+    _acceptViewColumn(value: theia.ViewColumn): void {
         ok(!this.disposed);
         this._viewColumn = value;
     }
 
-    // tslint:disable-next-line:max-line-length
+    // eslint-disable-next-line max-len
     edit(callback: (editBuilder: theia.TextEditorEdit) => void, options: { undoStopBefore: boolean; undoStopAfter: boolean; } = { undoStopBefore: true, undoStopAfter: true }): Promise<boolean> {
         if (this.disposed) {
             return Promise.reject(new Error('TextEditor#edit not possible on closed editor'));
@@ -143,7 +143,7 @@ export class TextEditorExt implements theia.TextEditor {
         callback(edit);
         return this.applyEdit(edit);
     }
-    // tslint:disable-next-line:max-line-length
+    // eslint-disable-next-line max-len
     insertSnippet(snippet: SnippetString, location?: Position | Range | Position[] | Range[], options: { undoStopBefore: boolean; undoStopAfter: boolean; } = { undoStopBefore: true, undoStopAfter: true }): Promise<boolean> {
         if (this.disposed) {
             return Promise.reject(new Error('TextEditor#insertSnippet not possible on closed editors'));
@@ -249,7 +249,7 @@ export class TextEditorExt implements theia.TextEditor {
         });
     }
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private runOnProxy(callback: () => Promise<any>): Promise<TextEditorExt | undefined> {
         if (this.disposed) {
             console.warn('TextEditor is disposed!');
@@ -368,7 +368,7 @@ export class TextEditorOptionsExt implements theia.TextEditorOptions {
         warnOnError(this.proxy.$trySetOptions(this.id, { lineNumbers: val }));
     }
 
-    public assign(newOptions: theia.TextEditorOptions) {
+    public assign(newOptions: theia.TextEditorOptions): void {
         const configurationUpdate: TextEditorConfigurationUpdate = {};
         let hasUpdate = false;
 
@@ -503,7 +503,7 @@ export class TextEditorEdit {
     }
 }
 
-// tslint:disable-next-line:no-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function warnOnError(promise: Promise<any>): void {
     promise.then(undefined, err => {
         console.warn(err);

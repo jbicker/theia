@@ -17,18 +17,18 @@
 import { injectable, inject, postConstruct, interfaces, Container } from 'inversify';
 import { MenuPath } from '@theia/core/lib/common';
 import { TreeNode, NodeProps } from '@theia/core/lib/browser';
-import { ViewContainerPartWidget, ViewContainerPartToolbarElement } from '@theia/core/lib/browser/view-container';
 import { SourceTreeWidget } from '@theia/core/lib/browser/source-tree';
 import { DebugBreakpointsSource } from './debug-breakpoints-source';
 import { BreakpointManager } from '../breakpoint/breakpoint-manager';
 import { DebugViewModel } from './debug-view-model';
 
 @injectable()
-export class DebugBreakpointsWidget extends SourceTreeWidget implements ViewContainerPartWidget {
+export class DebugBreakpointsWidget extends SourceTreeWidget {
 
     static CONTEXT_MENU: MenuPath = ['debug-breakpoints-context-menu'];
-    static REMOVE_MENU = [...DebugBreakpointsWidget.CONTEXT_MENU, 'a_remove'];
-    static ENABLE_MENU = [...DebugBreakpointsWidget.CONTEXT_MENU, 'b_enable'];
+    static EDIT_MENU = [...DebugBreakpointsWidget.CONTEXT_MENU, 'a_edit'];
+    static REMOVE_MENU = [...DebugBreakpointsWidget.CONTEXT_MENU, 'b_remove'];
+    static ENABLE_MENU = [...DebugBreakpointsWidget.CONTEXT_MENU, 'c_enable'];
     static createContainer(parent: interfaces.Container): Container {
         const child = SourceTreeWidget.createContainer(parent, {
             contextMenuPath: DebugBreakpointsWidget.CONTEXT_MENU,
@@ -64,25 +64,6 @@ export class DebugBreakpointsWidget extends SourceTreeWidget implements ViewCont
 
     protected getDefaultNodeStyle(node: TreeNode, props: NodeProps): React.CSSProperties | undefined {
         return undefined;
-    }
-
-    readonly toolbarElements: ViewContainerPartToolbarElement[] = [
-        this.createActivateToolbarElement(),
-        {
-            className: 'fa breakpoints-remove-all',
-            tooltip: 'Remove All Breakpoints',
-            execute: () => this.breakpoints.cleanAllMarkers()
-        }
-    ];
-    protected createActivateToolbarElement(): ViewContainerPartToolbarElement {
-        const getTooltip = () => this.breakpoints.breakpointsEnabled ? 'Deactivate Breakpoints' : 'Activate Breakpoints';
-        return {
-            className: 'fa breakpoints-activate',
-            get tooltip() {
-                return getTooltip();
-            },
-            execute: () => this.breakpoints.breakpointsEnabled = !this.breakpoints.breakpointsEnabled
-        };
     }
 
 }

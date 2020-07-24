@@ -72,7 +72,7 @@ export interface NavigatableWidgetOptions {
 }
 export namespace NavigatableWidgetOptions {
     export function is(arg: Object | undefined): arg is NavigatableWidgetOptions {
-        // tslint:disable-next-line:no-any
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return !!arg && 'kind' in arg && (arg as any).kind === 'navigatable';
     }
 }
@@ -87,7 +87,11 @@ export abstract class NavigatableWidgetOpenHandler<W extends NavigatableWidget> 
     }
 
     protected serializeUri(uri: URI): string {
-        return uri.withoutFragment().toString();
+        if (uri.scheme === 'file') {
+            return uri.withoutFragment().normalizePath().toString();
+        } else {
+            return uri.withoutFragment().toString();
+        }
     }
 
 }

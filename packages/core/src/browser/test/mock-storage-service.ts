@@ -23,9 +23,12 @@ import { injectable } from 'inversify';
 @injectable()
 export class MockStorageService implements StorageService {
     readonly data = new Map<string, {} | undefined>();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     onSetDataCallback?: (key: string, data?: any) => void;
 
-    onSetData(callback: (key: string, data?: any) => void) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onSetData(callback: (key: string, data?: any) => void): void {
         this.onSetDataCallback = callback;
     }
 

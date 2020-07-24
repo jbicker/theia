@@ -16,8 +16,10 @@
 
 import { injectable, inject, postConstruct } from 'inversify';
 import URI from '@theia/core/lib/common/uri';
-import { ApplicationShell, NavigatableWidget } from '@theia/core/lib/browser';
-import { VariableContribution, VariableRegistry } from '@theia/variable-resolver/lib/browser';
+import { Path } from '@theia/core/lib/common/path';
+import { FileSystem } from '@theia/filesystem/lib/common';
+import { ApplicationShell, NavigatableWidget, WidgetManager } from '@theia/core/lib/browser';
+import { VariableContribution, VariableRegistry, Variable } from '@theia/variable-resolver/lib/browser';
 import { WorkspaceService } from './workspace-service';
 
 @injectable()
@@ -27,52 +29,78 @@ export class WorkspaceVariableContribution implements VariableContribution {
     protected readonly workspaceService: WorkspaceService;
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
+    @inject(FileSystem)
+    protected readonly fileSystem: FileSystem;
+    @inject(WidgetManager)
+    protected readonly widgetManager: WidgetManager;
 
     protected currentWidget: NavigatableWidget | undefined;
 
     @postConstruct()
     protected init(): void {
-        this.updateCurrentWidget();
         this.shell.currentChanged.connect(() => this.updateCurrentWidget());
+        this.widgetManager.onDidCreateWidget(({ widget }) => {
+            if (NavigatableWidget.is(widget)) {
+                widget.onDidChangeVisibility(() => {
+                    if (widget.isVisible) {
+                        this.addRecentlyVisible(widget);
+                    } else {
+                        this.removeRecentlyVisible(widget);
+                    }
+                    this.updateCurrentWidget();
+                });
+                widget.onDidDispose(() => {
+                    this.removeRecentlyVisible(widget);
+                    this.updateCurrentWidget();
+                });
+            }
+        });
+        for (const widget of this.shell.widgets) {
+            if (NavigatableWidget.is(widget) && widget.isVisible) {
+                this.addRecentlyVisible(widget);
+            }
+        }
+        this.updateCurrentWidget();
     }
+
+    protected readonly recentlyVisibleIds: string[] = [];
+    protected get recentlyVisible(): NavigatableWidget | undefined {
+        const id = this.recentlyVisibleIds[0];
+        const widget = id && this.shell.getWidgetById(id) || undefined;
+        if (NavigatableWidget.is(widget)) {
+            return widget;
+        }
+        return undefined;
+    }
+    protected addRecentlyVisible(widget: NavigatableWidget): void {
+        this.removeRecentlyVisible(widget);
+        this.recentlyVisibleIds.unshift(widget.id);
+    }
+    protected removeRecentlyVisible(widget: NavigatableWidget): void {
+        const index = this.recentlyVisibleIds.indexOf(widget.id);
+        if (index !== -1) {
+            this.recentlyVisibleIds.splice(index, 1);
+        }
+    }
+
     protected updateCurrentWidget(): void {
         const { currentWidget } = this.shell;
         if (NavigatableWidget.is(currentWidget)) {
             this.currentWidget = currentWidget;
+        } else if (!this.currentWidget || !this.currentWidget.isVisible) {
+            this.currentWidget = this.recentlyVisible;
         }
     }
 
     registerVariables(variables: VariableRegistry): void {
-        variables.registerVariable({
-            name: 'workspaceRoot',
-            description: 'The path of the workspace root folder',
-            resolve: () => {
-                const uri = this.getWorkspaceRootUri();
-                return uri && uri.path.toString();
-            }
-        });
-        variables.registerVariable({
-            name: 'workspaceFolder',
-            description: 'The path of the workspace root folder',
-            resolve: () => {
-                const uri = this.getWorkspaceRootUri();
-                return uri && uri.path.toString();
-            }
-        });
-        variables.registerVariable({
-            name: 'workspaceFolderBasename',
-            description: 'The name of the workspace root folder',
-            resolve: () => {
-                const uri = this.getWorkspaceRootUri();
-                return uri && uri.displayName;
-            }
-        });
+        this.registerWorkspaceRootVariables(variables);
+
         variables.registerVariable({
             name: 'file',
             description: 'The path of the currently opened file',
             resolve: () => {
                 const uri = this.getResourceUri();
-                return uri && uri.path.toString();
+                return uri && this.fileSystem.getFsPath(uri.toString());
             }
         });
         variables.registerVariable({
@@ -107,40 +135,88 @@ export class WorkspaceVariableContribution implements VariableContribution {
                 return uri && uri.path.ext;
             }
         });
-        variables.registerVariable({
-            name: 'relativeFile',
-            description: "The currently opened file's path relative to the workspace root",
-            resolve: () => {
-                const uri = this.getResourceUri();
-                return uri && this.getWorkspaceRelativePath(uri);
+    }
+
+    protected registerWorkspaceRootVariables(variables: VariableRegistry): void {
+        const scoped = (variable: Variable): Variable => ({
+            name: variable.name,
+            description: variable.description,
+            resolve: (context, workspaceRootName) => {
+                const workspaceRoot = workspaceRootName && this.workspaceService.tryGetRoots().find(r => new URI(r.uri).path.name === workspaceRootName);
+                return variable.resolve(workspaceRoot ? new URI(workspaceRoot.uri) : context);
             }
         });
+        variables.registerVariable(scoped({
+            name: 'workspaceRoot',
+            description: 'The path of the workspace root folder',
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return uri && this.fileSystem.getFsPath(uri.toString());
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'workspaceFolder',
+            description: 'The path of the workspace root folder',
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return uri && this.fileSystem.getFsPath(uri.toString());
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'workspaceRootFolderName',
+            description: 'The name of the workspace root folder',
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return uri && uri.displayName;
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'workspaceFolderBasename',
+            description: 'The name of the workspace root folder',
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return uri && uri.displayName;
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'cwd',
+            description: "The task runner's current working directory on startup",
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return (uri && this.fileSystem.getFsPath(uri.toString())) || '';
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'relativeFile',
+            description: "The currently opened file's path relative to the workspace root",
+            resolve: (context?: URI) => {
+                const uri = this.getResourceUri();
+                return uri && this.getWorkspaceRelativePath(uri, context);
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'relativeFileDirname',
+            description: "The current opened file's dirname relative to ${workspaceFolder}",
+            resolve: (context?: URI) => {
+                const uri = this.getResourceUri();
+                const relativePath = uri && this.getWorkspaceRelativePath(uri, context);
+                return relativePath && new Path(relativePath).dir.toString();
+            }
+        }));
     }
 
-    protected getWorkspaceRootUri(uri: URI | undefined = this.getResourceUri()): URI | undefined {
-        if (!uri) {
-            const root = this.workspaceService.tryGetRoots()[0];
-            if (root) {
-                return new URI(root.uri);
-            }
-            return undefined;
-        }
-        for (const root of this.workspaceService.tryGetRoots()) {
-            const rootUri = new URI(root.uri);
-            if (rootUri && rootUri.isEqualOrParent(uri)) {
-                return rootUri;
-            }
-        }
-        return undefined;
+    getWorkspaceRootUri(uri: URI | undefined = this.getResourceUri()): URI | undefined {
+        return this.workspaceService.getWorkspaceRootUri(uri);
     }
 
-    protected getResourceUri(): URI | undefined {
+    getResourceUri(): URI | undefined {
         return this.currentWidget && this.currentWidget.getResourceUri();
     }
 
-    protected getWorkspaceRelativePath(uri: URI): string | undefined {
-        const workspaceRootUri = this.getWorkspaceRootUri(uri);
+    getWorkspaceRelativePath(uri: URI, context?: URI): string | undefined {
+        const workspaceRootUri = this.getWorkspaceRootUri(context || uri);
         const path = workspaceRootUri && workspaceRootUri.path.relative(uri.path);
         return path && path.toString();
     }
+
 }

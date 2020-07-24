@@ -16,15 +16,21 @@
 
 import { injectable } from 'inversify';
 import { MenuContribution, MenuModelRegistry, MenuPath, MAIN_MENU_BAR } from '@theia/core';
-import { CommonCommands } from '@theia/core/lib/browser';
+import { CommonCommands, CommonMenus } from '@theia/core/lib/browser';
 import { EditorCommands } from './editor-command';
 
 export const EDITOR_CONTEXT_MENU: MenuPath = ['editor_context_menu'];
 
+/**
+ * Editor context menu default groups should be aligned
+ * with VS Code default groups: https://code.visualstudio.com/api/references/contribution-points#contributes.menus
+ */
 export namespace EditorContextMenu {
-    export const UNDO_REDO = [...EDITOR_CONTEXT_MENU, '1_undo'];
-    export const CUT_COPY_PASTE = [...EDITOR_CONTEXT_MENU, '2_cut_copy_paste'];
     export const NAVIGATION = [...EDITOR_CONTEXT_MENU, 'navigation'];
+    export const MODIFICATION = [...EDITOR_CONTEXT_MENU, '1_modification'];
+    export const CUT_COPY_PASTE = [...EDITOR_CONTEXT_MENU, '9_cutcopypaste'];
+    export const COMMANDS = [...EDITOR_CONTEXT_MENU, 'z_commands'];
+    export const UNDO_REDO = [...EDITOR_CONTEXT_MENU, '1_undo'];
 }
 
 export namespace EditorMainMenu {
@@ -44,7 +50,7 @@ export namespace EditorMainMenu {
 @injectable()
 export class EditorMenuContribution implements MenuContribution {
 
-    registerMenus(registry: MenuModelRegistry) {
+    registerMenus(registry: MenuModelRegistry): void {
         registry.registerMenuAction(EditorContextMenu.UNDO_REDO, {
             commandId: CommonCommands.UNDO.id
         });
@@ -78,6 +84,23 @@ export class EditorMenuContribution implements MenuContribution {
         registry.registerMenuAction(EditorMainMenu.NAVIGATION_GROUP, {
             commandId: EditorCommands.GO_LAST_EDIT.id,
             label: 'Last Edit Location'
+        });
+
+        // Toggle Commands.
+        registry.registerMenuAction(CommonMenus.VIEW_TOGGLE, {
+            commandId: EditorCommands.TOGGLE_WORD_WRAP.id,
+            label: EditorCommands.TOGGLE_WORD_WRAP.label,
+            order: '0'
+        });
+        registry.registerMenuAction(CommonMenus.VIEW_TOGGLE, {
+            commandId: EditorCommands.TOGGLE_MINIMAP.id,
+            label: 'Show Minimap',
+            order: '1',
+        });
+        registry.registerMenuAction(CommonMenus.VIEW_TOGGLE, {
+            commandId: EditorCommands.TOGGLE_RENDER_WHITESPACE.id,
+            label: 'Render Whitespace',
+            order: '2'
         });
     }
 

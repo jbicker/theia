@@ -21,17 +21,28 @@ import { ContributionProvider } from './contribution-provider';
 
 export interface MenuAction {
     commandId: string
+    /**
+     * In addition to the mandatory command property, an alternative command can be defined.
+     * It will be shown and invoked when pressing Alt while opening a menu.
+     */
+    alt?: string;
     label?: string
     icon?: string
     order?: string
+    when?: string
 }
 
 export namespace MenuAction {
     /* Determine whether object is a MenuAction */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     export function is(arg: MenuAction | any): arg is MenuAction {
         return !!arg && arg === Object(arg) && 'commandId' in arg;
     }
+}
+
+export interface SubMenuOptions {
+    iconClass?: string
+    order?: string
 }
 
 export type MenuPath = string[];
@@ -39,7 +50,15 @@ export type MenuPath = string[];
 export const MAIN_MENU_BAR: MenuPath = ['menubar'];
 
 export const MenuContribution = Symbol('MenuContribution');
+
+/**
+ * Representation of a menu contribution.
+ */
 export interface MenuContribution {
+    /**
+     * Registers menus.
+     * @param menus the menu model registry.
+     */
     registerMenus(menus: MenuModelRegistry): void;
 }
 
@@ -65,7 +84,7 @@ export class MenuModelRegistry {
         return parent.addNode(actionNode);
     }
 
-    registerSubmenu(menuPath: MenuPath, label: string): Disposable {
+    registerSubmenu(menuPath: MenuPath, label: string, options?: SubMenuOptions): Disposable {
         if (menuPath.length === 0) {
             throw new Error('The sub menu path cannot be empty.');
         }
@@ -75,13 +94,21 @@ export class MenuModelRegistry {
         const parent = this.findGroup(groupPath);
         let groupNode = this.findSubMenu(parent, menuId);
         if (!groupNode) {
-            groupNode = new CompositeMenuNode(menuId, label);
+            groupNode = new CompositeMenuNode(menuId, label, options);
             return parent.addNode(groupNode);
         } else {
             if (!groupNode.label) {
                 groupNode.label = label;
             } else if (groupNode.label !== label) {
                 throw new Error("The group '" + menuPath.join('/') + "' already has a different label.");
+            }
+            if (options) {
+                if (!groupNode.iconClass) {
+                    groupNode.iconClass = options.iconClass;
+                }
+                if (!groupNode.order) {
+                    groupNode.order = options.order;
+                }
             }
             return { dispose: () => { } };
         }
@@ -112,7 +139,8 @@ export class MenuModelRegistry {
 
         if (menuPath) {
             const parent = this.findGroup(menuPath);
-            return parent.removeNode(id);
+            parent.removeNode(id);
+            return;
         }
 
         // Recurse all menus, removing any menus matching the id
@@ -141,7 +169,7 @@ export class MenuModelRegistry {
             return sub;
         }
         if (sub) {
-            throw Error(`'${menuId}' is not a menu group.`);
+            throw new Error(`'${menuId}' is not a menu group.`);
         }
         const newSub = new CompositeMenuNode(menuId);
         current.addNode(newSub);
@@ -165,10 +193,19 @@ export interface MenuNode {
 
 export class CompositeMenuNode implements MenuNode {
     protected readonly _children: MenuNode[] = [];
+    public iconClass?: string;
+    public order?: string;
+
     constructor(
         public readonly id: string,
-        public label?: string
-    ) { }
+        public label?: string,
+        options?: SubMenuOptions
+    ) {
+        if (options) {
+            this.iconClass = options.iconClass;
+            this.order = options.order;
+        }
+    }
 
     get children(): ReadonlyArray<MenuNode> {
         return this._children;
@@ -177,6 +214,13 @@ export class CompositeMenuNode implements MenuNode {
     public addNode(node: MenuNode): Disposable {
         this._children.push(node);
         this._children.sort((m1, m2) => {
+            // The navigation group is special as it will always be sorted to the top/beginning of a menu.
+            if (CompositeMenuNode.isNavigationGroup(m1)) {
+                return -1;
+            }
+            if (CompositeMenuNode.isNavigationGroup(m2)) {
+                return 1;
+            }
             if (m1.sortString < m2.sortString) {
                 return -1;
             } else if (m1.sortString > m2.sortString) {
@@ -195,7 +239,7 @@ export class CompositeMenuNode implements MenuNode {
         };
     }
 
-    public removeNode(id: string) {
+    public removeNode(id: string): void {
         const node = this._children.find(n => n.id === id);
         if (node) {
             const idx = this._children.indexOf(node);
@@ -205,20 +249,31 @@ export class CompositeMenuNode implements MenuNode {
         }
     }
 
-    get sortString() {
-        return this.id;
+    get sortString(): string {
+        return this.order || this.id;
     }
 
     get isSubmenu(): boolean {
         return this.label !== undefined;
     }
+
+    static isNavigationGroup(node: MenuNode): node is CompositeMenuNode {
+        return node instanceof CompositeMenuNode && node.id === 'navigation';
+    }
 }
 
 export class ActionMenuNode implements MenuNode {
+
+    readonly altNode: ActionMenuNode | undefined;
+
     constructor(
         public readonly action: MenuAction,
         protected readonly commands: CommandRegistry
-    ) { }
+    ) {
+        if (action.alt) {
+            this.altNode = new ActionMenuNode({ commandId: action.alt }, commands);
+        }
+    }
 
     get id(): string {
         return this.action.commandId;
@@ -243,7 +298,7 @@ export class ActionMenuNode implements MenuNode {
         return command && command.iconClass;
     }
 
-    get sortString() {
+    get sortString(): string {
         return this.action.order || this.label;
     }
 }

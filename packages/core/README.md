@@ -1,6 +1,55 @@
-# Theia - Core extension
+<div align='center'>
 
-## Logging configuration
+<br />
+
+<img src='https://raw.githubusercontent.com/eclipse-theia/theia/master/logo/theia.svg?sanitize=true' alt='theia-ext-logo' width='100px' />
+
+<h2>THEIA - CORE EXTENSION</h2>
+
+<hr />
+
+</div>
+
+## Description
+
+The `@theia/core` extension is the main extension for all Theia-based applications, and provides the main framework for all dependent extensions.
+The extension provides the base APIs for all Theia-based applications, including:
+- Application APIs
+- Shell APIs
+- Base Widgets
+- Contribution Points (ex: commands, menu items, keybindings)
+
+## Theia Extension
+
+A Theia extension is a node package declaring `theiaExtensions` property in `package.json`:
+
+```json
+{
+  "theiaExtensions": [{
+      "frontend": "lib/myExtension/browser/myextension-frontend-module",
+      "backend": "lib/myExtension/node/myextension-backend-module",
+    }, {
+      "frontend": "lib/myExtension2/browser/myextension2-browser-module",
+      "frontendElectron": "lib/myExtension2/electron-browser/myextension2-electron-browser-module",
+      "backend": "lib/myExtension2/node/myextension2-node-module",
+      "backendElectron": "lib/myExtension2/electron-main/myextension2-electron-main-module"
+  }]
+}
+```
+
+Each extension can consist of the following modules:
+- `frontend` is used in the browser env and as well in the electron if `frontendElectron` is not provided
+- `frontendElectron` is used in the electron env
+- `backend` is used in the node env and as well in the electron env if `backendElectron` is not provided
+- `backendElectron` is used in the electron env
+
+An extension module should have a default export of `ContainerModule | Promise<ContainerModule>` type.
+
+## Theia Application
+
+A Theia application is a node package listing [Theia extensions](#theia-extension) as dependencies and managed with [Theia CLI](../../dev-packages/cli/README.md).
+
+## Logging Configuration
 
 It's possible to change the log level for the entire Theia application by
 passing it the `--log-level={fatal,error,warn,info,debug,trace}` option.  For
@@ -35,6 +84,17 @@ root INFO [nsfw-watcher: 10734] Started watching: /Users/captain.future/git/thei
 ```
 Where `root` is the name of the logger and `INFO` is the log level. These are optionally followed by the name of a child process and the process ID.
 
+## Additional Information
+
+- [API documentation for `@theia/core`](https://eclipse-theia.github.io/theia/docs/next/modules/core.html)
+- [Theia - GitHub](https://github.com/eclipse-theia/theia)
+- [Theia - Website](https://theia-ide.org/)
+
 ## License
+
 - [Eclipse Public License 2.0](http://www.eclipse.org/legal/epl-2.0/)
 - [一 (Secondary) GNU General Public License, version 2 with the GNU Classpath Exception](https://projects.eclipse.org/license/secondary-gpl-2.0-cp)
+
+## Trademark
+"Theia" is a trademark of the Eclipse Foundation
+https://www.eclipse.org/theia

@@ -16,8 +16,9 @@
 
 import { inject, injectable, named } from 'inversify';
 import { ILogger, DisposableCollection } from '@theia/core/lib/common';
-import { IBaseTerminalServer, IBaseTerminalServerOptions, IBaseTerminalClient } from '../common/base-terminal-protocol';
+import { IBaseTerminalServer, IBaseTerminalServerOptions, IBaseTerminalClient, TerminalProcessInfo } from '../common/base-terminal-protocol';
 import { TerminalProcess, ProcessManager } from '@theia/process/lib/node';
+import { ShellProcess } from './shell-process';
 
 @injectable()
 export abstract class BaseTerminalServer implements IBaseTerminalServer {
@@ -50,12 +51,43 @@ export abstract class BaseTerminalServer implements IBaseTerminalServer {
         }
     }
 
+    async getProcessId(id: number): Promise<number> {
+        const terminal = this.processManager.get(id);
+        if (!(terminal instanceof TerminalProcess)) {
+            throw new Error(`terminal "${id}" does not exist`);
+        }
+        return terminal.pid;
+    }
+
+    async getProcessInfo(id: number): Promise<TerminalProcessInfo> {
+        const terminal = this.processManager.get(id);
+        if (!(terminal instanceof TerminalProcess)) {
+            throw new Error(`terminal "${id}" does not exist`);
+        }
+        return {
+            executable: terminal.executable,
+            arguments: terminal.arguments,
+        };
+    }
+
+    async getCwdURI(id: number): Promise<string> {
+        const terminal = this.processManager.get(id);
+        if (!(terminal instanceof TerminalProcess)) {
+            throw new Error(`terminal "${id}" does not exist`);
+        }
+        return terminal.getCwdURI();
+    }
+
     async close(id: number): Promise<void> {
         const term = this.processManager.get(id);
 
         if (term instanceof TerminalProcess) {
             term.kill();
         }
+    }
+
+    async getDefaultShell(): Promise<string> {
+        return ShellProcess.getShellExecutablePath();
     }
 
     dispose(): void {
@@ -85,7 +117,7 @@ export abstract class BaseTerminalServer implements IBaseTerminalServer {
             if (this.client !== undefined) {
                 this.client.onTerminalError({
                     'terminalId': term.id,
-                    'error': error
+                    'error': new Error(`Failed to execute terminal process (${error.code})`),
                 });
             }
         }));

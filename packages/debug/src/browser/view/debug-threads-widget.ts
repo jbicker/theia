@@ -22,6 +22,7 @@ import { DebugThreadsSource } from './debug-threads-source';
 import { DebugSession } from '../debug-session';
 import { DebugThread } from '../model/debug-thread';
 import { DebugViewModel } from '../view/debug-view-model';
+import { DebugCallStackItemTypeKey } from '../debug-call-stack-item-type-key';
 
 @injectable()
 export class DebugThreadsWidget extends SourceTreeWidget {
@@ -50,6 +51,9 @@ export class DebugThreadsWidget extends SourceTreeWidget {
 
     @inject(DebugViewModel)
     protected readonly viewModel: DebugViewModel;
+
+    @inject(DebugCallStackItemTypeKey)
+    protected readonly debugCallStackItemTypeKey: DebugCallStackItemTypeKey;
 
     @postConstruct()
     protected init(): void {
@@ -91,8 +95,10 @@ export class DebugThreadsWidget extends SourceTreeWidget {
             if (TreeElementNode.is(node)) {
                 if (node.element instanceof DebugSession) {
                     this.viewModel.currentSession = node.element;
+                    this.debugCallStackItemTypeKey.set('session');
                 } else if (node.element instanceof DebugThread) {
                     node.element.session.currentThread = node.element;
+                    this.debugCallStackItemTypeKey.set('thread');
                 }
             }
         } finally {
@@ -100,8 +106,15 @@ export class DebugThreadsWidget extends SourceTreeWidget {
         }
     }
 
+    protected toContextMenuArgs(node: SelectableTreeNode): [number] | undefined {
+        if (TreeElementNode.is(node) && node.element instanceof DebugThread) {
+            return [node.element.raw.id];
+        }
+        return undefined;
+    }
+
     protected getDefaultNodeStyle(node: TreeNode, props: NodeProps): React.CSSProperties | undefined {
-        if (this.threads.multiSesssion) {
+        if (this.threads.multiSession) {
             return super.getDefaultNodeStyle(node, props);
         }
         return undefined;

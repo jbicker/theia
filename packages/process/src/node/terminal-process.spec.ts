@@ -18,7 +18,8 @@ import * as process from 'process';
 import * as stream from 'stream';
 import { createProcessTestContainer } from './test/process-test-container';
 import { TerminalProcessFactory } from './terminal-process';
-import { isWindows } from '@theia/core/lib/common';
+import { IProcessExitEvent, ProcessErrorEvent } from './process';
+import { isWindows } from '@theia/core/lib/common/os';
 
 /**
  * Globals
@@ -26,59 +27,65 @@ import { isWindows } from '@theia/core/lib/common';
 
 const expect = chai.expect;
 
-describe('TerminalProcess', function () {
+let terminalProcessFactory: TerminalProcessFactory;
 
-    this.timeout(5000);
-    let terminalProcessFactory: TerminalProcessFactory;
+beforeEach(() => {
+    terminalProcessFactory = createProcessTestContainer().get<TerminalProcessFactory>(TerminalProcessFactory);
+});
 
-    beforeEach(() => {
-        terminalProcessFactory = createProcessTestContainer().get<TerminalProcessFactory>(TerminalProcessFactory);
+describe('TerminalProcess', function (): void {
+
+    this.timeout(20_000);
+
+    it('test error on non existent path', async function (): Promise<void> {
+        const error = await new Promise<ProcessErrorEvent>((resolve, reject) => {
+            const proc = terminalProcessFactory({ command: '/non-existent' });
+            proc.onStart(reject);
+            proc.onError(resolve);
+            proc.onExit(reject);
+        });
+
+        expect(error.code).eq('ENOENT');
     });
 
-    it('test error on non existent path', async function () {
+    it('test error on trying to execute a directory', async function (): Promise<void> {
+        const error = await new Promise<ProcessErrorEvent>((resolve, reject) => {
+            const proc = terminalProcessFactory({ command: __dirname });
+            proc.onStart(reject);
+            proc.onError(resolve);
+            proc.onExit(reject);
+        });
 
-        /* Strangely, Linux returns exited with code 1 when using a non existing path but Windows throws an error.
-        This would need to be investigated more.  */
         if (isWindows) {
-            return expect(() => terminalProcessFactory({ command: '/non-existent' })).to.throw();
+            // On Windows, node-pty returns us a "File not found" message, so we can't really differentiate this case
+            // from trying to execute a non-existent file.  node's child_process.spawn also returns ENOENT, so it's
+            // probably the best we can get.
+            expect(error.code).eq('ENOENT');
         } else {
-            const terminalProcess = terminalProcessFactory({ command: '/non-existant' });
-            const p = new Promise(resolve => {
-                terminalProcess.onExit(event => {
-                    if (event.code > 0) { resolve(); }
-                });
-            });
-
-            await p;
+            expect(error.code).eq('EACCES');
         }
     });
 
-    it('test exit', async function () {
+    it('test exit', async function (): Promise<void> {
         const args = ['--version'];
-        const terminalProcess = terminalProcessFactory({ command: process.execPath, 'args': args });
-        const p = new Promise((resolve, reject) => {
-            terminalProcess.onError(error => {
-                reject();
-            });
-            terminalProcess.onExit(event => {
-                if (event.code === 0) {
-                    resolve();
-                } else {
-                    reject();
-                }
-            });
+        const exit = await new Promise<IProcessExitEvent>((resolve, reject) => {
+            const proc = terminalProcessFactory({ command: process.execPath, args });
+            proc.onExit(resolve);
+            proc.onError(reject);
         });
 
-        await p;
+        expect(exit.code).eq(0);
     });
 
-    it('test pipe stream', async function () {
-        const args = ['--version'];
-        const terminalProcess = terminalProcessFactory({ command: process.execPath, 'args': args });
+    it('test pipe stream', async function (): Promise<void> {
+        const v = await new Promise<string>((resolve, reject) => {
+            const args = ['--version'];
+            const terminalProcess = terminalProcessFactory({ command: process.execPath, args });
+            terminalProcess.onError(reject);
+            const outStream = new stream.PassThrough();
 
-        const outStream = new stream.PassThrough();
+            terminalProcess.createOutputStream().pipe(outStream);
 
-        const p = new Promise<string>((resolve, reject) => {
             let version = '';
             outStream.on('data', data => {
                 version += data.toString();
@@ -90,9 +97,8 @@ describe('TerminalProcess', function () {
             });
         });
 
-        terminalProcess.createOutputStream().pipe(outStream);
-
         /* Avoid using equal since terminal characters can be inserted at the end.  */
-        expect(await p).to.have.string(process.version);
+        expect(v).to.have.string(process.version);
     });
+
 });

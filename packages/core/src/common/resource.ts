@@ -15,27 +15,75 @@
  ********************************************************************************/
 
 import { injectable, inject, named } from 'inversify';
-import { TextDocumentContentChangeEvent } from 'vscode-languageserver-types';
+import { TextDocumentContentChangeEvent } from 'vscode-languageserver-protocol';
 import URI from '../common/uri';
 import { ContributionProvider } from './contribution-provider';
-import { Event } from './event';
+import { Event, Emitter } from './event';
 import { Disposable } from './disposable';
 import { MaybePromise } from './types';
 import { CancellationToken } from './cancellation';
 import { ApplicationError } from './application-error';
 
+export interface ResourceVersion {
+}
+
+export interface ResourceReadOptions {
+    encoding?: string
+}
+
+export interface ResourceSaveOptions {
+    encoding?: string,
+    overwriteEncoding?: string,
+    version?: ResourceVersion
+}
+
 export interface Resource extends Disposable {
     readonly uri: URI;
-    readContents(options?: { encoding?: string }): Promise<string>;
-    saveContents?(content: string, options?: { encoding?: string }): Promise<void>;
-    saveContentChanges?(changes: TextDocumentContentChangeEvent[], options?: { encoding?: string }): Promise<void>;
+    /**
+     * Latest read version of this resource.
+     *
+     * Optional if a resource does not support versioning, check with `in` operator`.
+     * Undefined if a resource did not read content yet.
+     */
+    readonly version?: ResourceVersion | undefined;
+    /**
+     * Reads latest content of this resource.
+     *
+     * If a resource supports versioning it updates version to latest.
+     *
+     * @throws `ResourceError.NotFound` if a resource not found
+     */
+    readContents(options?: ResourceReadOptions): Promise<string>;
+    /**
+     * Rewrites the complete content for this resource.
+     * If a resource does not exist it will be created.
+     *
+     * If a resource supports versioning clients can pass some version
+     * to check against it, if it is not provided latest version is used.
+     * It updates version to latest.
+     *
+     * @throws `ResourceError.OutOfSync` if latest resource version is out of sync with the given
+     */
+    saveContents?(content: string, options?: ResourceSaveOptions): Promise<void>;
+    /**
+     * Applies incremental content changes to this resource.
+     *
+     * If a resource supports versioning clients can pass some version
+     * to check against it, if it is not provided latest version is used.
+     * It updates version to latest.
+     *
+     * @throws `ResourceError.NotFound` if a resource not found or was not read yet
+     * @throws `ResourceError.OutOfSync` if latest resource version is out of sync with the given
+     */
+    saveContentChanges?(changes: TextDocumentContentChangeEvent[], options?: ResourceSaveOptions): Promise<void>;
     readonly onDidChangeContents?: Event<void>;
+    guessEncoding?(): Promise<string | undefined>
 }
 export namespace Resource {
     export interface SaveContext {
         content: string
         changes?: TextDocumentContentChangeEvent[]
-        options?: { encoding?: string }
+        options?: ResourceSaveOptions
     }
     export async function save(resource: Resource, context: SaveContext, token?: CancellationToken): Promise<void> {
         if (!resource.saveContents) {
@@ -55,11 +103,13 @@ export namespace Resource {
         }
         try {
             await resource.saveContentChanges(context.changes, context.options);
+            return true;
         } catch (e) {
-            console.error(e);
+            if (!ResourceError.NotFound.is(e) && !ResourceError.OutOfSync.is(e)) {
+                console.error(`Failed to apply incremental changes to '${resource.uri.toString()}':`, e);
+            }
             return false;
         }
-        return true;
     }
     export function shouldSaveContent({ content, changes }: SaveContext): boolean {
         if (!changes) {
@@ -79,6 +129,7 @@ export namespace Resource {
 
 export namespace ResourceError {
     export const NotFound = ApplicationError.declare(-40000, (raw: ApplicationError.Literal<{ uri: URI }>) => raw);
+    export const OutOfSync = ApplicationError.declare(-40001, (raw: ApplicationError.Literal<{ uri: URI }>) => raw);
 }
 
 export const ResourceResolver = Symbol('ResourceResolver');
@@ -112,39 +163,65 @@ export class DefaultResourceProvider {
                 // no-op
             }
         }
-        return Promise.reject(`A resource provider for '${uri.toString()}' is not registered.`);
+        return Promise.reject(new Error(`A resource provider for '${uri.toString()}' is not registered.`));
     }
 
+}
+
+export class MutableResource implements Resource {
+    private contents: string;
+
+    constructor(readonly uri: URI, contents: string, readonly dispose: () => void) {
+        this.contents = contents;
+    }
+
+    async readContents(): Promise<string> {
+        return this.contents;
+    }
+
+    async saveContents(contents: string): Promise<void> {
+        this.contents = contents;
+        this.fireDidChangeContents();
+    }
+
+    protected readonly onDidChangeContentsEmitter = new Emitter<void>();
+    onDidChangeContents = this.onDidChangeContentsEmitter.event;
+    protected fireDidChangeContents(): void {
+        this.onDidChangeContentsEmitter.fire(undefined);
+    }
 }
 
 @injectable()
 export class InMemoryResources implements ResourceResolver {
 
-    private resources = new Map<string, Resource>();
+    private readonly resources = new Map<string, MutableResource>();
 
     add(uri: URI, contents: string): Resource {
-        const stringUri = uri.toString();
-        if (this.resources.has(stringUri)) {
-            throw new Error(`Cannot add already existing in-memory resource '${stringUri}'`);
+        const resourceUri = uri.toString();
+        if (this.resources.has(resourceUri)) {
+            throw new Error(`Cannot add already existing in-memory resource '${resourceUri}'`);
         }
-        const resource: Resource = {
-            uri,
-            async readContents(): Promise<string> {
-                return contents;
-            },
-            dispose: () => {
-                this.resources.delete(stringUri);
-            }
-        };
-        this.resources.set(stringUri, resource);
+
+        const resource = new MutableResource(uri, contents, () => this.resources.delete(resourceUri));
+        this.resources.set(resourceUri, resource);
         return resource;
     }
 
-    resolve(uri: URI): MaybePromise<Resource> {
-        if (!this.resources.has(uri.toString())) {
-            throw new Error('Resource does not exist.');
+    update(uri: URI, contents: string): Resource {
+        const resourceUri = uri.toString();
+        const resource = this.resources.get(resourceUri);
+        if (!resource) {
+            throw new Error(`Cannot update non-existed in-memory resource '${resourceUri}'`);
         }
-        return this.resources.get(uri.toString())!;
+        resource.saveContents(contents);
+        return resource;
     }
 
+    resolve(uri: URI): Resource {
+        const uriString = uri.toString();
+        if (!this.resources.has(uriString)) {
+            throw new Error(`In memory '${uriString}' resource does not exist.`);
+        }
+        return this.resources.get(uriString)!;
+    }
 }

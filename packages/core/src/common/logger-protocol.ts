@@ -14,6 +14,7 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+import { injectable } from 'inversify';
 import { JsonRpcServer } from './messaging/proxy-factory';
 
 export const ILoggerServer = Symbol('ILoggerServer');
@@ -23,7 +24,7 @@ export const loggerPath = '/services/logger';
 export interface ILoggerServer extends JsonRpcServer<ILoggerClient> {
     setLogLevel(name: string, logLevel: number): Promise<void>;
     getLogLevel(name: string): Promise<number>;
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     log(name: string, logLevel: number, message: any, params: any[]): Promise<void>;
     child(name: string): Promise<void>;
 }
@@ -37,6 +38,17 @@ export interface ILogLevelChangedEvent {
 
 export interface ILoggerClient {
     onLogLevelChanged(event: ILogLevelChangedEvent): void;
+}
+
+@injectable()
+export class DispatchingLoggerClient implements ILoggerClient {
+
+    readonly clients = new Set<ILoggerClient>();
+
+    onLogLevelChanged(event: ILogLevelChangedEvent): void {
+        this.clients.forEach(client => client.onLogLevelChanged(event));
+    }
+
 }
 
 export const rootLoggerName = 'root';
@@ -74,7 +86,7 @@ export namespace LogLevel {
     }
 }
 
-// tslint:disable:no-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export namespace ConsoleLogger {
     type Console = (message?: any, ...optionalParams: any[]) => void;
     const originalConsoleLog = console.log;
@@ -97,6 +109,6 @@ export namespace ConsoleLogger {
     export function log(name: string, logLevel: number, message: string, params: any[]): void {
         const console = consoles.get(logLevel) || originalConsoleLog;
         const severity = (LogLevel.strings.get(logLevel) || 'unknown').toUpperCase();
-        console(`${name} ${severity}`, message, ...params);
+        console(`${name} ${severity} ${message}`, ...params);
     }
 }

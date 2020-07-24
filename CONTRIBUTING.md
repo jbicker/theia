@@ -1,4 +1,4 @@
-# Contributing to Theia
+# Contributing to Eclipse Theia
 
 Theia is a young open-source project with a modular architecture. One of the
 goals is to make sure that we can customize and enhance any Theia application
@@ -42,17 +42,20 @@ an issue. Simply choose the issue you would want to work on, and tell everyone
 that you are willing to do so and how you would approach it. The team will be
 happy to guide you and give feedback.
 
+We follow the contributing and reviewing pull request guidelines described
+[here](https://github.com/eclipse-theia/theia/blob/master/doc/pull-requests.md).
+
 ## Coding Guidelines
 
 We follow the coding guidelines described
-[here](https://github.com/theia-ide/theia/wiki/Coding-Guidelines).
+[here](https://github.com/eclipse-theia/theia/wiki/Coding-Guidelines).
 
 ## Eclipse Contributor Agreement
 
 Before your contribution can be accepted by the project team contributors must
 electronically sign the Eclipse Contributor Agreement (ECA).
 
-* http://www.eclipse.org/legal/ECA.php
+* https://www.eclipse.org/legal/ECA.php
 
 Commits that are provided by non-committers must have a Signed-off-by field in
 the footer indicating that the author is aware of the terms by which the
@@ -69,7 +72,7 @@ The sign-off is a simple line at the end of the explanation for the patch. Your
 signature certifies that you wrote the patch or otherwise have the right to
 pass it on as an open-source patch. The rules are pretty simple: if you can
 certify the below (from
-[developercertificate.org](http://developercertificate.org/)):
+[developercertificate.org](https://developercertificate.org/)):
 
 ```
 Developer Certificate of Origin

@@ -26,19 +26,35 @@ import {
     IConnection
 } from 'vscode-ws-jsonrpc/lib/server';
 import { MaybePromise } from '@theia/core/lib/common';
+import { WebSocketChannelConnection } from '@theia/core/lib/node/messaging';
 import { LanguageContribution } from '../common';
 import { RawProcess, RawProcessFactory } from '@theia/process/lib/node/raw-process';
 import { ProcessManager } from '@theia/process/lib/node/process-manager';
+import { ProcessErrorEvent } from '@theia/process/lib/node/process';
 
 export {
     LanguageContribution, IConnection, Message
 };
 
-export const LanguageServerContribution = Symbol('LanguageServerContribution');
-export interface LanguageServerContribution extends LanguageContribution {
-    start(clientConnection: IConnection): void;
+export interface LanguageServerStartOptions {
+    sessionId: string
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    parameters?: any
 }
 
+/**
+ * @deprecated since 1.4.0 - in order to remove monaco-languageclient, use VS Code extensions to contribute language smartness:
+ * https://code.visualstudio.com/api/language-extensions/language-server-extension-guide
+ */
+export const LanguageServerContribution = Symbol('LanguageServerContribution');
+export interface LanguageServerContribution extends LanguageContribution {
+    start(clientConnection: IConnection, options: LanguageServerStartOptions): MaybePromise<void>;
+}
+
+/**
+ * @deprecated since 1.4.0 - in order to remove monaco-languageclient, use VS Code extensions to contribute language smartness:
+ * https://code.visualstudio.com/api/language-extensions/language-server-extension-guide
+ */
 @injectable()
 export abstract class BaseLanguageServerContribution implements LanguageServerContribution {
 
@@ -51,10 +67,12 @@ export abstract class BaseLanguageServerContribution implements LanguageServerCo
     @inject(ProcessManager)
     protected readonly processManager: ProcessManager;
 
-    abstract start(clientConnection: IConnection): void;
-
+    abstract start(clientConnection: IConnection, options: LanguageServerStartOptions): void;
     protected forward(clientConnection: IConnection, serverConnection: IConnection): void {
         forward(clientConnection, serverConnection, this.map.bind(this));
+        if (WebSocketChannelConnection.is(clientConnection)) {
+            serverConnection.onClose(() => clientConnection.channel.tryClose());
+        }
     }
 
     protected map(message: Message): Message {
@@ -70,34 +88,65 @@ export abstract class BaseLanguageServerContribution implements LanguageServerCo
     protected async createProcessSocketConnection(outSocket: MaybePromise<net.Socket>, inSocket: MaybePromise<net.Socket>,
         command: string, args?: string[], options?: cp.SpawnOptions): Promise<IConnection> {
 
-        const process = this.spawnProcess(command, args, options);
-        const [outSock, inSock] = await Promise.all([outSocket, inSocket]);
-        return createProcessSocketConnection(process.process, outSock, inSock);
+        const process = await this.spawnProcessAsync(command, args, options);
+        const [outSock, inSock] = await Promise.all<net.Socket>([outSocket, inSocket]);
+        return createProcessSocketConnection(process.process!, outSock, inSock);
     }
 
+    /**
+     * @deprecated use `createProcessStreamConnectionAsync` instead.
+     * Otherwise, the backend cannot notify the client if the LS has failed at start-up.
+     */
     protected createProcessStreamConnection(command: string, args?: string[], options?: cp.SpawnOptions): IConnection {
         const process = this.spawnProcess(command, args, options);
         return createStreamConnection(process.output, process.input, () => process.kill());
     }
 
+    protected async createProcessStreamConnectionAsync(command: string, args?: string[], options?: cp.SpawnOptions): Promise<IConnection> {
+        const process = await this.spawnProcessAsync(command, args, options);
+        return createStreamConnection(process.outputStream, process.inputStream, () => process.kill());
+    }
+
+    /**
+     * @deprecated use `spawnProcessAsync` instead.
+     */
     protected spawnProcess(command: string, args?: string[], options?: cp.SpawnOptions): RawProcess {
         const rawProcess = this.processFactory({ command, args, options });
-        rawProcess.process.once('error', this.onDidFailSpawnProcess.bind(this));
-        rawProcess.process.stderr.on('data', this.logError.bind(this));
+        rawProcess.onError(this.onDidFailSpawnProcess.bind(this));
+        rawProcess.errorStream.on('data', this.logError.bind(this));
         return rawProcess;
     }
 
-    protected onDidFailSpawnProcess(error: Error): void {
+    protected spawnProcessAsync(command: string, args?: string[], options?: cp.SpawnOptions): Promise<RawProcess> {
+        const rawProcess = this.processFactory({ command, args, options });
+        rawProcess.errorStream.on('data', this.logError.bind(this));
+        return new Promise<RawProcess>((resolve, reject) => {
+            rawProcess.onError((error: ProcessErrorEvent) => {
+                this.onDidFailSpawnProcess(error);
+                if (error.code === 'ENOENT') {
+                    const guess = command.split(/\s+/).shift();
+                    if (guess) {
+                        reject(new Error(`Failed to spawn ${guess}\nPerhaps it is not on the PATH.`));
+                        return;
+                    }
+                }
+                reject(error);
+            });
+            process.nextTick(() => resolve(rawProcess));
+        });
+    }
+
+    protected onDidFailSpawnProcess(error: Error | ProcessErrorEvent): void {
         console.error(error);
     }
 
-    protected logError(data: string | Buffer) {
+    protected logError(data: string | Buffer): void {
         if (data) {
             console.error(`${this.name}: ${data}`);
         }
     }
 
-    protected logInfo(data: string | Buffer) {
+    protected logInfo(data: string | Buffer): void {
         if (data) {
             console.info(`${this.name}: ${data}`);
         }

@@ -14,7 +14,6 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import * as cluster from 'cluster';
 import { ContainerModule, Container, interfaces } from 'inversify';
 import { Git, GitPath } from '../common/git';
 import { GitWatcherPath, GitWatcherClient, GitWatcherServer } from '../common/git-watcher';
@@ -27,6 +26,12 @@ import { GitLocator } from './git-locator/git-locator-protocol';
 import { GitLocatorClient } from './git-locator/git-locator-client';
 import { GitLocatorImpl } from './git-locator/git-locator-impl';
 import { GitExecProvider } from './git-exec-provider';
+import { GitPromptServer, GitPromptClient, GitPrompt } from '../common/git-prompt';
+import { DugiteGitPromptServer } from './dugite-git-prompt';
+import { ConnectionContainerModule } from '@theia/core/lib/node/messaging/connection-container-module';
+import { DefaultGitInit, GitInit } from './init/git-init';
+
+const SINGLE_THREADED = process.argv.indexOf('--no-cluster') !== -1;
 
 export interface GitBindingOptions {
     readonly bindManager: (binding: interfaces.BindingToSyntax<{}>) => interfaces.BindingWhenOnSyntax<{}>;
@@ -43,13 +48,15 @@ export namespace GitBindingOptions {
 export function bindGit(bind: interfaces.Bind, bindingOptions: GitBindingOptions = GitBindingOptions.Default): void {
     bindingOptions.bindManager(bind(GitRepositoryManager));
     bind(GitRepositoryWatcherFactory).toFactory(ctx => (options: GitRepositoryWatcherOptions) => {
+        // GitRepositoryWatcherFactory is injected into the singleton GitRepositoryManager only.
+        // GitRepositoryWatcher instances created there should be able to access the (singleton) Git.
         const child = new Container({ defaultScope: 'Singleton' });
         child.parent = ctx.container;
         child.bind(GitRepositoryWatcher).toSelf();
         child.bind(GitRepositoryWatcherOptions).toConstantValue(options);
         return child.get(GitRepositoryWatcher);
     });
-    if (cluster.isMaster) {
+    if (SINGLE_THREADED) {
         bind(GitLocator).toDynamicValue(ctx => {
             const logger = ctx.container.get<ILogger>(ILogger);
             return new GitLocatorImpl({
@@ -60,34 +67,52 @@ export function bindGit(bind: interfaces.Bind, bindingOptions: GitBindingOptions
     } else {
         bind(GitLocator).to(GitLocatorClient);
     }
-    bind(DugiteGit).toSelf().inSingletonScope();
     bind(OutputParser).toSelf().inSingletonScope();
     bind(NameStatusParser).toSelf().inSingletonScope();
     bind(CommitDetailsParser).toSelf().inSingletonScope();
     bind(GitBlameParser).toSelf().inSingletonScope();
     bind(GitExecProvider).toSelf().inSingletonScope();
+    bind(DugiteGit).toSelf().inSingletonScope();
     bind(Git).toService(DugiteGit);
+    bind(DefaultGitInit).toSelf();
+    bind(GitInit).toService(DefaultGitInit);
+    bind(ConnectionContainerModule).toConstantValue(gitConnectionModule);
 }
+
+const gitConnectionModule = ConnectionContainerModule.create(({ bind, bindBackendService }) => {
+    // DugiteGit is bound in singleton scope; each connection should use a proxy for that.
+    const GitProxy = Symbol('GitProxy');
+    bind(GitProxy).toDynamicValue(ctx => new Proxy(ctx.container.get(DugiteGit), {}));
+    bindBackendService(GitPath, GitProxy);
+});
 
 export function bindRepositoryWatcher(bind: interfaces.Bind): void {
     bind(DugiteGitWatcherServer).toSelf();
     bind(GitWatcherServer).toService(DugiteGitWatcherServer);
 }
 
+export function bindPrompt(bind: interfaces.Bind): void {
+    bind(DugiteGitPromptServer).toSelf().inSingletonScope();
+    bind(GitPromptServer).toDynamicValue(context => context.container.get(DugiteGitPromptServer));
+}
+
 export default new ContainerModule(bind => {
     bindGit(bind);
-    bind(ConnectionHandler).toDynamicValue(context =>
-        new JsonRpcConnectionHandler(GitPath, client => {
-            const server = context.container.get<Git>(Git);
-            client.onDidCloseConnection(() => server.dispose());
-            return server;
-        })
-    ).inSingletonScope();
 
     bindRepositoryWatcher(bind);
     bind(ConnectionHandler).toDynamicValue(context =>
         new JsonRpcConnectionHandler<GitWatcherClient>(GitWatcherPath, client => {
             const server = context.container.get<GitWatcherServer>(GitWatcherServer);
+            server.setClient(client);
+            client.onDidCloseConnection(() => server.dispose());
+            return server;
+        })
+    ).inSingletonScope();
+
+    bindPrompt(bind);
+    bind(ConnectionHandler).toDynamicValue(context =>
+        new JsonRpcConnectionHandler<GitPromptClient>(GitPrompt.WS_PATH, client => {
+            const server = context.container.get<GitPromptServer>(GitPromptServer);
             server.setClient(client);
             client.onDidCloseConnection(() => server.dispose());
             return server;

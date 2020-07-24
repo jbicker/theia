@@ -14,9 +14,11 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { ContainerModule } from 'inversify';
-import { ResourceResolver } from '@theia/core/lib/common';
-import { WebSocketConnectionProvider, FrontendApplicationContribution, ConfirmDialog } from '@theia/core/lib/browser';
+import '../../src/browser/style/index.css';
+
+import { ContainerModule, interfaces } from 'inversify';
+import { ResourceResolver, CommandContribution } from '@theia/core/lib/common';
+import { WebSocketConnectionProvider, FrontendApplicationContribution, ConfirmDialog, LabelProviderContribution, LabelProvider } from '@theia/core/lib/browser';
 import { FileSystem, fileSystemPath, FileShouldOverwrite, FileStat } from '../common';
 import {
     fileSystemWatcherPath, FileSystemWatcherServer,
@@ -26,8 +28,10 @@ import { FileResourceResolver } from './file-resource';
 import { bindFileSystemPreferences } from './filesystem-preferences';
 import { FileSystemWatcher } from './filesystem-watcher';
 import { FileSystemFrontendContribution } from './filesystem-frontend-contribution';
-
-import '../../src/browser/style/index.css';
+import { FileSystemProxyFactory } from './filesystem-proxy-factory';
+import { FileUploadService } from './file-upload-service';
+import { FileTreeLabelProvider } from './file-tree/file-tree-label-provider';
+import URI from '@theia/core/lib/common/uri';
 
 export default new ContainerModule(bind => {
     bindFileSystemPreferences(bind);
@@ -37,22 +41,36 @@ export default new ContainerModule(bind => {
     );
     bind(FileSystemWatcherServer).to(ReconnectingFileSystemWatcherServer);
     bind(FileSystemWatcher).toSelf().inSingletonScope();
-    bind(FileShouldOverwrite).toFunction(async function (file: FileStat, stat: FileStat): Promise<boolean> {
+    bind(FileShouldOverwrite).toDynamicValue(context => async (file: FileStat, stat: FileStat): Promise<boolean> => {
+        const labelProvider = context.container.get(LabelProvider);
         const dialog = new ConfirmDialog({
-            title: `The file '${file.uri}' has been changed on the file system.`,
-            msg: 'Do you want to overwrite the changes made on the file system?',
+            title: `The file '${labelProvider.getName(new URI(file.uri))}' has been changed on the file system.`,
+            msg: `Do you want to overwrite the changes made to '${labelProvider.getLongName(new URI(file.uri))}' on the file system?`,
             ok: 'Yes',
             cancel: 'No'
         });
         return !!await dialog.open();
-    });
+    }).inSingletonScope();
 
-    bind(FileSystem).toDynamicValue(ctx =>
-        WebSocketConnectionProvider.createProxy<FileSystem>(ctx.container, fileSystemPath)
-    ).inSingletonScope();
+    bind(FileSystemProxyFactory).toSelf();
+    bind(FileSystem).toDynamicValue(ctx => {
+        const proxyFactory = ctx.container.get(FileSystemProxyFactory);
+        return WebSocketConnectionProvider.createProxy(ctx.container, fileSystemPath, proxyFactory);
+    }).inSingletonScope();
 
+    bindFileResource(bind);
+
+    bind(FileUploadService).toSelf().inSingletonScope();
+
+    bind(FileSystemFrontendContribution).toSelf().inSingletonScope();
+    bind(CommandContribution).toService(FileSystemFrontendContribution);
+    bind(FrontendApplicationContribution).toService(FileSystemFrontendContribution);
+
+    bind(FileTreeLabelProvider).toSelf().inSingletonScope();
+    bind(LabelProviderContribution).toService(FileTreeLabelProvider);
+});
+
+export function bindFileResource(bind: interfaces.Bind): void {
     bind(FileResourceResolver).toSelf().inSingletonScope();
     bind(ResourceResolver).toService(FileResourceResolver);
-
-    bind(FrontendApplicationContribution).to(FileSystemFrontendContribution).inSingletonScope();
-});
+}

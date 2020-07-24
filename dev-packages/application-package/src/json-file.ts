@@ -15,8 +15,9 @@
  ********************************************************************************/
 
 import * as fs from 'fs';
-
 import writeJsonFile = require('write-json-file');
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function readJsonFile(path: string): any {
     return JSON.parse(fs.readFileSync(path, { encoding: 'utf-8' }));
 }

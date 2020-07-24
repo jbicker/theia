@@ -14,27 +14,42 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { ContainerModule, interfaces, decorate, injectable } from 'inversify';
+import { ContainerModule, decorate, injectable } from 'inversify';
 import { ApplicationPackage } from '@theia/application-package';
-import { bindContributionProvider, MessageService, MessageClient, ConnectionHandler, JsonRpcConnectionHandler } from '../common';
+import {
+    bindContributionProvider, MessageService, MessageClient, ConnectionHandler, JsonRpcConnectionHandler,
+    CommandService, commandServicePath, messageServicePath
+} from '../common';
 import { BackendApplication, BackendApplicationContribution, BackendApplicationCliContribution } from './backend-application';
 import { CliManager, CliContribution } from './cli';
-import { ServerProcess, RemoteMasterProcessFactory, clusterRemoteMasterProcessFactory } from './cluster';
 import { IPCConnectionProvider } from './messaging';
 import { ApplicationServerImpl } from './application-server';
 import { ApplicationServer, applicationPath } from '../common/application-protocol';
 import { EnvVariablesServer, envVariablesPath } from './../common/env-variables';
 import { EnvVariablesServerImpl } from './env-variables';
+import { ConnectionContainerModule } from './messaging/connection-container-module';
+import { QuickPickService, quickPickServicePath } from '../common/quick-pick-service';
 
 decorate(injectable(), ApplicationPackage);
 
-export function bindServerProcess(bind: interfaces.Bind, masterFactory: RemoteMasterProcessFactory): void {
-    bind(RemoteMasterProcessFactory).toConstantValue(masterFactory);
-    bind(ServerProcess).toSelf().inSingletonScope();
-    bind(BackendApplicationContribution).toService(ServerProcess);
-}
+const commandConnectionModule = ConnectionContainerModule.create(({ bindFrontendService }) => {
+    bindFrontendService(commandServicePath, CommandService);
+});
+
+const messageConnectionModule = ConnectionContainerModule.create(({ bind, bindFrontendService }) => {
+    bindFrontendService(messageServicePath, MessageClient);
+    bind(MessageService).toSelf().inSingletonScope();
+});
+
+const quickPickConnectionModule = ConnectionContainerModule.create(({ bindFrontendService }) => {
+    bindFrontendService(quickPickServicePath, QuickPickService);
+});
 
 export const backendApplicationModule = new ContainerModule(bind => {
+    bind(ConnectionContainerModule).toConstantValue(commandConnectionModule);
+    bind(ConnectionContainerModule).toConstantValue(messageConnectionModule);
+    bind(ConnectionContainerModule).toConstantValue(quickPickConnectionModule);
+
     bind(CliManager).toSelf().inSingletonScope();
     bindContributionProvider(bind, CliContribution);
 
@@ -43,11 +58,6 @@ export const backendApplicationModule = new ContainerModule(bind => {
 
     bind(BackendApplication).toSelf().inSingletonScope();
     bindContributionProvider(bind, BackendApplicationContribution);
-
-    bindServerProcess(bind, clusterRemoteMasterProcessFactory);
-
-    bind(MessageClient).toSelf().inSingletonScope();
-    bind(MessageService).toSelf().inSingletonScope();
 
     bind(IPCConnectionProvider).toSelf().inSingletonScope();
 

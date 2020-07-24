@@ -16,58 +16,37 @@
 
 import { injectable } from 'inversify';
 import { QuickOpenModel } from './quick-open-model';
+import { MessageType } from '../../common/message-service-protocol';
+import * as common from '../../common/quick-open-service';
+import { QuickOpenItem } from '../../common/quick-open-model';
+import { Emitter } from '../../common/event';
 
-export type QuickOpenOptions = Partial<QuickOpenOptions.Resolved>;
-export namespace QuickOpenOptions {
-    export interface Resolved {
-        readonly prefix: string;
-        readonly placeholder: string;
-
-        readonly fuzzyMatchLabel: boolean;
-        readonly fuzzyMatchDetail: boolean;
-        readonly fuzzyMatchDescription: boolean;
-        readonly fuzzySort: boolean;
-
-        /** The amount of first symbols to be ignored by quick open widget (e.g. don't affect matching). */
-        readonly skipPrefix: number;
-
-        /**
-         * Whether to display the items that don't have any highlight.
-         */
-        readonly showItemsWithoutHighlight: boolean;
-
-        selectIndex(lookfor: string): number;
-
-        onClose(canceled: boolean): void;
-    }
-    export const defaultOptions: Resolved = Object.freeze({
-        prefix: '',
-        placeholder: '',
-
-        fuzzyMatchLabel: false,
-        fuzzyMatchDetail: false,
-        fuzzyMatchDescription: false,
-        fuzzySort: false,
-
-        skipPrefix: 0,
-
-        showItemsWithoutHighlight: false,
-
-        onClose: () => { /* no-op*/ },
-
-        selectIndex: () => -1
-    });
-    export function resolve(options: QuickOpenOptions = {}, source: Resolved = defaultOptions): Resolved {
-        return Object.assign({}, source, options);
-    }
-}
+/**
+ * @deprecated import from `@theia/core/lib/common/quick-open-service` instead
+ */
+export { QuickOpenOptions } from '../../common/quick-open-service';
 
 @injectable()
 export class QuickOpenService {
+
+    /**
+     * Dom node of the QuickOpenWidget
+     */
+    widgetNode: HTMLElement;
+
+    protected readonly onDidChangeActiveEmitter = new Emitter<QuickOpenItem[]>();
+    readonly onDidChangeActive = this.onDidChangeActiveEmitter.event;
+    getActive(): QuickOpenItem[] {
+        return [];
+    }
+
     /**
      * It should be implemented by an extension, e.g. by the monaco extension.
      */
-    open(model: QuickOpenModel, options?: QuickOpenOptions): void {
-        // no-op
-    }
+    open(model: QuickOpenModel, options?: common.QuickOpenOptions): void { }
+    hide(reason?: common.QuickOpenHideReason): void { }
+    showDecoration(type: MessageType): void { }
+    hideDecoration(): void { }
+    refresh(): void { }
+
 }

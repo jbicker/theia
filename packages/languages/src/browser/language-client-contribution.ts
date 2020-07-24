@@ -14,12 +14,12 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-// tslint:disable:no-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { injectable, inject } from 'inversify';
-import { MessageService, CommandRegistry } from '@theia/core';
+import { MaybePromise, MessageService, CommandRegistry } from '@theia/core';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common';
-import { FrontendApplication, WebSocketConnectionProvider, WebSocketOptions } from '@theia/core/lib/browser';
+import { FrontendApplication, WebSocketConnectionProvider } from '@theia/core/lib/browser';
 import {
     LanguageContribution, ILanguageClient, LanguageClientOptions,
     DocumentSelector, TextDocument, FileSystemWatcher,
@@ -29,7 +29,12 @@ import { MessageConnection, ResponseError } from 'vscode-jsonrpc';
 import { LanguageClientFactory } from './language-client-factory';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { InitializeParams } from 'monaco-languageclient';
+import { Deferred } from '@theia/core/lib/common/promise-util';
 
+/**
+ * @deprecated since 1.4.0 - in order to remove monaco-languageclient, use VS Code extensions to contribute language smartness:
+ * https://code.visualstudio.com/api/language-extensions/language-server-extension-guide
+ */
 export const LanguageClientContribution = Symbol('LanguageClientContribution');
 export interface LanguageClientContribution extends LanguageContribution {
     readonly running: boolean;
@@ -40,6 +45,10 @@ export interface LanguageClientContribution extends LanguageContribution {
     restart(): void;
 }
 
+/**
+ * @deprecated since 1.4.0 - in order to remove monaco-languageclient, use VS Code extensions to contribute language smartness:
+ * https://code.visualstudio.com/api/language-extensions/language-server-extension-guide
+ */
 @injectable()
 export abstract class BaseLanguageClientContribution implements LanguageClientContribution {
 
@@ -54,6 +63,7 @@ export abstract class BaseLanguageClientContribution implements LanguageClientCo
     @inject(MessageService) protected readonly messageService: MessageService;
     @inject(CommandRegistry) protected readonly registry: CommandRegistry;
     @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService;
+    @inject(LanguageContribution.Service) protected readonly languageContributionService: LanguageContribution.Service;
     @inject(WebSocketConnectionProvider) protected readonly connectionProvider: WebSocketConnectionProvider;
 
     constructor(
@@ -68,9 +78,9 @@ export abstract class BaseLanguageClientContribution implements LanguageClientCo
         return this._languageClient ? Promise.resolve(this._languageClient) : this.ready;
     }
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     waitForActivation(app: FrontendApplication): Promise<any> {
-        // tslint:disable-next-line:no-any
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const activationPromises: Promise<any>[] = [];
         const workspaceContains = this.workspaceContains;
         if (workspaceContains.length !== 0) {
@@ -96,38 +106,79 @@ export abstract class BaseLanguageClientContribution implements LanguageClientCo
         return this.workspace.ready;
     }
 
+    protected deferredConnection = new Deferred<MessageConnection>();
+
     protected readonly toDeactivate = new DisposableCollection();
     activate(): Disposable {
         if (this.toDeactivate.disposed) {
-            this.doActivate(this.toDeactivate);
+            if (!this._languageClient) {
+                this._languageClient = this.createLanguageClient(() => this.deferredConnection.promise);
+                this._languageClient.onDidChangeState(({ newState }) => {
+                    this.state = newState;
+                });
+            }
+            const toStop = new DisposableCollection(Disposable.create(() => { })); // mark as not disposed
+            this.toDeactivate.push(toStop);
+            this.doActivate(toStop);
         }
         return this.toDeactivate;
     }
     deactivate(): void {
         this.toDeactivate.dispose();
     }
-    protected doActivate(toDeactivate: DisposableCollection): void {
-        const options: WebSocketOptions = {};
-        toDeactivate.push(Disposable.create(() => options.reconnecting = false));
-        this.connectionProvider.listen({
-            path: LanguageContribution.getPath(this),
-            onConnection: messageConnection => {
-                if (toDeactivate.disposed) {
-                    messageConnection.dispose();
-                    return;
-                }
-                const languageClient = this.createLanguageClient(messageConnection);
-                this.onWillStart(languageClient);
-                toDeactivate.pushAll([
-                    messageConnection,
-                    this.toRestart.push(Disposable.create(async () => {
-                        await languageClient.onReady();
-                        languageClient.stop();
-                    })),
-                    languageClient.start()
-                ]);
+
+    protected stop = Promise.resolve();
+    protected async doActivate(toStop: DisposableCollection): Promise<void> {
+        try {
+            // make sure that the previous client is stopped to avoid duplicate commands and language services
+            await this.stop;
+            if (toStop.disposed) {
+                return;
             }
-        }, options);
+            const startParameters = await this.getStartParameters();
+            if (toStop.disposed) {
+                return;
+            }
+            const sessionId = await this.languageContributionService.create(this.id, startParameters);
+            if (toStop.disposed) {
+                this.languageContributionService.destroy(sessionId);
+                return;
+            }
+            toStop.push(Disposable.create(() => this.languageContributionService.destroy(sessionId)));
+            this.connectionProvider.listen({
+                path: LanguageContribution.getPath(this, sessionId),
+                onConnection: messageConnection => {
+                    this.deferredConnection.resolve(messageConnection);
+                    messageConnection.onDispose(() => this.deferredConnection = new Deferred<MessageConnection>());
+                    if (toStop.disposed) {
+                        messageConnection.dispose();
+                        return;
+                    }
+                    toStop.push(Disposable.create(() => this.stop = (async () => {
+                        try {
+                            // avoid calling stop if start failed
+                            await this._languageClient!.onReady();
+                            // remove all listeners
+                            await this._languageClient!.stop();
+                        } catch {
+                            try {
+                                // if start or stop failed make sure the the connection is closed
+                                messageConnection.dispose();
+                            } catch { /* no-op */ }
+                        }
+                    })()));
+                    toStop.push(messageConnection.onClose(() => this.forceRestart()));
+                    this._languageClient!.start();
+                    // it should be called after `start` that `onReady` promise gets reinitialized
+                    this.onWillStart(this._languageClient!, toStop);
+                }
+            }, { reconnecting: false });
+        } catch (e) {
+            console.error(e);
+            if (!toStop.disposed) {
+                this.forceRestart();
+            }
+        }
     }
 
     protected state: State | undefined;
@@ -135,19 +186,23 @@ export abstract class BaseLanguageClientContribution implements LanguageClientCo
         return !this.toDeactivate.disposed && this.state === State.Running;
     }
 
-    protected readonly toRestart = new DisposableCollection();
     restart(): void {
-        this.toRestart.dispose();
+        if (!this.running) {
+            return;
+        }
+        this.forceRestart();
     }
 
-    protected onWillStart(languageClient: ILanguageClient): void {
-        languageClient.onDidChangeState(({ newState }) => {
-            this.state = newState;
-        });
-        languageClient.onReady().then(() => this.onReady(languageClient));
+    protected forceRestart(): void {
+        this.deactivate();
+        this.activate();
     }
 
-    protected onReady(languageClient: ILanguageClient): void {
+    protected onWillStart(languageClient: ILanguageClient, toStop?: DisposableCollection): void {
+        languageClient.onReady().then(() => this.onReady(languageClient, toStop));
+    }
+
+    protected onReady(languageClient: ILanguageClient, toStop?: DisposableCollection): void {
         this._languageClient = languageClient;
         this.resolveReady(this._languageClient);
         this.waitForReady();
@@ -159,7 +214,7 @@ export abstract class BaseLanguageClientContribution implements LanguageClientCo
         );
     }
 
-    protected createLanguageClient(connection: MessageConnection): ILanguageClient {
+    protected createLanguageClient(connection: MessageConnection | (() => MaybePromise<MessageConnection>)): ILanguageClient {
         const clientOptions = this.createOptions();
         return this.languageClientFactory.get(this, clientOptions, connection);
     }
@@ -185,7 +240,11 @@ export abstract class BaseLanguageClientContribution implements LanguageClientCo
         return false;
     }
 
-    // tslint:disable-next-line:no-any
+    protected getStartParameters(): MaybePromise<any> {
+        return undefined;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     protected get initializationOptions(): any | (() => any) | undefined {
         return undefined;
     }
@@ -223,7 +282,7 @@ export abstract class BaseLanguageClientContribution implements LanguageClientCo
     /**
      * Check to see if one of the paths is in the current workspace.
      */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     protected async waitForItemInWorkspace(): Promise<any> {
         const doesContain = await this.workspaceService.containsSome(this.workspaceContains);
         if (!doesContain) {

@@ -18,8 +18,10 @@ export const envVariablesPath = '/services/envs';
 
 export const EnvVariablesServer = Symbol('EnvVariablesServer');
 export interface EnvVariablesServer {
+    getExecPath(): Promise<string>
     getVariables(): Promise<EnvVariable[]>
     getValue(key: string): Promise<EnvVariable | undefined>
+    getConfigDirUri(): Promise<string>;
 }
 
 export interface EnvVariable {

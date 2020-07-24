@@ -16,13 +16,14 @@
 
 import { injectable, inject } from 'inversify';
 import { MessageConnection } from 'vscode-jsonrpc';
-import { CommandRegistry, Disposable } from '@theia/core/lib/common';
+import { CommandRegistry, Disposable, MaybePromise } from '@theia/core/lib/common';
 import { ErrorAction, RevealOutputChannelOn, CloseAction } from 'monaco-languageclient';
 import {
     Workspace, Languages, Window, Services,
     ILanguageClient, LanguageClientOptions, MonacoLanguageClient,
     createConnection, LanguageContribution
 } from './language-client-services';
+import { TypeHierarchyFeature } from './typehierarchy/typehierarchy-feature';
 
 @injectable()
 export class LanguageClientFactory {
@@ -44,13 +45,14 @@ export class LanguageClientFactory {
         });
     }
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     protected registerCommand(id: string, callback: (...args: any[]) => any, thisArg?: any): Disposable {
         const execute = callback.bind(thisArg);
         return this.registry.registerCommand({ id }, { execute });
     }
 
-    get(contribution: LanguageContribution, clientOptions: LanguageClientOptions, connection: MessageConnection): ILanguageClient {
+    get(contribution: LanguageContribution, clientOptions: LanguageClientOptions,
+        connectionProvider: MessageConnection | (() => MaybePromise<MessageConnection>)): ILanguageClient {
         if (clientOptions.revealOutputChannelOn === undefined) {
             clientOptions.revealOutputChannelOn = RevealOutputChannelOn.Never;
         }
@@ -61,17 +63,44 @@ export class LanguageClientFactory {
                 closed: () => CloseAction.DoNotRestart
             };
         }
-        let initializationFailedHandler = clientOptions.initializationFailedHandler;
+        const initializationFailedHandler = clientOptions.initializationFailedHandler;
         clientOptions.initializationFailedHandler = e => !!initializationFailedHandler && initializationFailedHandler(e);
-        connection.onDispose(() => initializationFailedHandler = () => false);
-        return new MonacoLanguageClient({
+        const client = new MonacoLanguageClient({
             id: contribution.id,
             name: contribution.name,
             clientOptions,
             connectionProvider: {
-                get: async (errorHandler, closeHandler) => createConnection(connection, errorHandler, closeHandler)
+                get: async (errorHandler, closeHandler) => {
+                    const connection = typeof connectionProvider === 'function' ? await connectionProvider() : connectionProvider;
+                    return createConnection(connection, errorHandler, closeHandler);
+                }
             }
         });
+        client.registerFeature(new TypeHierarchyFeature(client));
+        return this.patch4085(client);
+    }
+
+    /**
+     * see https://github.com/eclipse-theia/theia/issues/4085
+     * remove when monaco-languageclient is upgraded to latest vscode-languageclient
+     */
+    protected patch4085(client: MonacoLanguageClient): MonacoLanguageClient {
+        const features = client['_dynamicFeatures'] as Map<string, {
+            _listener?: Object | undefined
+            dispose?: Function
+        }>;
+        for (const feature of features.values()) {
+            if (feature.dispose) {
+                const dispose = feature.dispose.bind(feature);
+                feature.dispose = () => {
+                    dispose();
+                    if (feature._listener) {
+                        feature._listener = undefined;
+                    }
+                };
+            }
+        }
+        return client;
     }
 
 }

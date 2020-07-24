@@ -15,11 +15,13 @@
  ********************************************************************************/
 import * as theia from '@theia/plugin';
 import { ThemeColor, StatusBarAlignment } from '../types-impl';
-import { StatusBarMessageRegistryMain } from '../../api/plugin-api';
-import { VS_COLORS } from './vscolor-const';
+import { StatusBarMessageRegistryMain } from '../../common/plugin-api-rpc';
+import { UUID } from '@phosphor/coreutils/lib/uuid';
 
 export class StatusBarItemImpl implements theia.StatusBarItem {
-    private _messageId: string;
+
+    private readonly id = StatusBarItemImpl.nextId();
+
     private _alignment: StatusBarAlignment;
     private _priority: number;
 
@@ -94,9 +96,7 @@ export class StatusBarItemImpl implements theia.StatusBarItem {
         if (this._timeoutHandle) {
             clearTimeout(this._timeoutHandle);
         }
-        if (this._messageId) {
-            this._proxy.$dispose(this._messageId);
-        }
+        this._proxy.$dispose(this.id);
         this._isVisible = false;
     }
 
@@ -104,40 +104,29 @@ export class StatusBarItemImpl implements theia.StatusBarItem {
         if (!this._isVisible) {
             return;
         }
-
-        if (this._messageId) {
-            this._proxy.$dispose(this._messageId);
-        }
-
         if (this._timeoutHandle) {
             clearTimeout(this._timeoutHandle);
         }
-
         // Defer the update so that multiple changes to setters don't cause a redraw each
         this._timeoutHandle = setTimeout(() => {
             this._timeoutHandle = undefined;
 
             // Set to status bar
-            this._proxy.$setMessage(this.text,
+            this._proxy.$setMessage(this.id, this.text,
                 this.priority,
                 this.alignment,
-                this.getColor(),
+                typeof this.color === 'string' ? this.color : this.color && this.color.id,
                 this.tooltip,
-                this.command).then((id: string) => {
-                    this._messageId = id;
-                });
+                this.command);
         }, 0);
-    }
-
-    private getColor(): string | undefined {
-        if (typeof this.color !== 'string' && typeof this.color !== 'undefined') {
-            const colorId = (<ThemeColor>this.color).id;
-            return `var(${VS_COLORS[colorId] ? VS_COLORS[colorId] : colorId})`;
-        }
-        return this.color;
     }
 
     public dispose(): void {
         this.hide();
     }
+
+    static nextId(): string {
+        return StatusBarItemImpl.ID_PREFIX + ':' + UUID.uuid4();
+    }
+    static ID_PREFIX = 'plugin-status-bar-item';
 }

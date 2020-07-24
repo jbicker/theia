@@ -17,11 +17,16 @@
 import { injectable, inject } from 'inversify';
 import { KeybindingContext } from '@theia/core/lib/browser';
 import { DebugSessionManager } from './debug-session-manager';
-import { DebugState } from './debug-session';
+import { DebugEditorService } from './editor/debug-editor-service';
+import { DebugEditorModel } from './editor/debug-editor-model';
 
 export namespace DebugKeybindingContexts {
 
     export const inDebugMode = 'inDebugMode';
+
+    export const breakpointWidgetInputFocus = 'breakpointWidgetInputFocus';
+
+    export const breakpointWidgetInputStrictFocus = 'breakpointWidgetInputStrictFocus';
 
 }
 
@@ -34,7 +39,37 @@ export class InDebugModeContext implements KeybindingContext {
     protected readonly manager: DebugSessionManager;
 
     isEnabled(): boolean {
-        return this.manager.state > DebugState.Inactive;
+        return this.manager.inDebugMode;
+    }
+
+}
+
+@injectable()
+export class BreakpointWidgetInputFocusContext implements KeybindingContext {
+
+    readonly id: string = DebugKeybindingContexts.breakpointWidgetInputFocus;
+
+    @inject(DebugEditorService)
+    protected readonly editors: DebugEditorService;
+
+    isEnabled(): boolean {
+        const model = this.editors.model;
+        return !!model && !!model.breakpointWidget.position && this.isFocused(model);
+    }
+
+    protected isFocused(model: DebugEditorModel): boolean {
+        return !!model.breakpointWidget.input && model.breakpointWidget.input.isFocused({ strict: true });
+    }
+
+}
+
+@injectable()
+export class BreakpointWidgetInputStrictFocusContext extends BreakpointWidgetInputFocusContext {
+
+    readonly id: string = DebugKeybindingContexts.breakpointWidgetInputStrictFocus;
+
+    protected isFocused(model: DebugEditorModel): boolean {
+        return super.isFocused(model) || model.editor.isFocused({ strict: true });
     }
 
 }

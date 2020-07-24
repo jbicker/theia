@@ -20,6 +20,7 @@ import { ConfirmDialog, ApplicationShell, SaveableWidget, NavigatableWidget } fr
 import { FileSystem } from '@theia/filesystem/lib/common';
 import { UriCommandHandler } from '@theia/core/lib/common/uri-command-handler';
 import { WorkspaceService } from './workspace-service';
+import { WorkspaceUtils } from './workspace-utils';
 
 @injectable()
 export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
@@ -30,18 +31,37 @@ export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
 
+    @inject(WorkspaceUtils)
+    protected readonly workspaceUtils: WorkspaceUtils;
+
     @inject(WorkspaceService)
     protected readonly workspaceService: WorkspaceService;
 
+    /**
+     * Determine if the command is visible.
+     *
+     * @param uris URIs of selected resources.
+     * @returns `true` if the command is visible.
+     */
     isVisible(uris: URI[]): boolean {
-        return !!uris.length && !this.isRootDeleted(uris);
+        return !!uris.length && !this.workspaceUtils.containsRootDirectory(uris);
     }
 
-    protected isRootDeleted(uris: URI[]): boolean {
-        const rootUris = this.workspaceService.tryGetRoots().map(root => new URI(root.uri));
-        return rootUris.some(rootUri => uris.some(uri => uri.isEqualOrParent(rootUri)));
+    /**
+     * Determine if the command is enabled.
+     *
+     * @param uris URIs of selected resources.
+     * @returns `true` if the command is enabled.
+     */
+    isEnabled(uris: URI[]): boolean {
+        return !!uris.length && !this.workspaceUtils.containsRootDirectory(uris);
     }
 
+    /**
+     * Execute the command.
+     *
+     * @param uris URIs of selected resources.
+     */
     async execute(uris: URI[]): Promise<void> {
         const distinctUris = URI.getDistinctParents(uris);
         if (await this.confirm(distinctUris)) {
@@ -49,6 +69,11 @@ export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
         }
     }
 
+    /**
+     * Display dialog to confirm deletion.
+     *
+     * @param uris URIs of selected resources.
+     */
     protected confirm(uris: URI[]): Promise<boolean | undefined> {
         return new ConfirmDialog({
             title: `Delete File${uris.length === 1 ? '' : 's'}`,
@@ -56,6 +81,11 @@ export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
         }).open();
     }
 
+    /**
+     * Get the dialog confirmation message for deletion.
+     *
+     * @param uris URIs of selected resources.
+     */
     protected getConfirmMessage(uris: URI[]): string | HTMLElement {
         const dirty = this.getDirty(uris);
         if (dirty.length) {
@@ -83,6 +113,12 @@ export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
         return messageContainer;
     }
 
+    /**
+     * Get which URI are presently dirty.
+     *
+     * @param uris URIs of selected resources.
+     * @returns An array of dirty URI.
+     */
     protected getDirty(uris: URI[]): URI[] {
         const dirty = new Map<string, URI>();
         const widgets = NavigatableWidget.getAffected(SaveableWidget.getDirty(this.shell.widgets), uris);
@@ -92,23 +128,34 @@ export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
         return [...dirty.values()];
     }
 
+    /**
+     * Perform deletion of a given URI.
+     *
+     * @param uri URI of selected resource.
+     */
     protected async delete(uri: URI): Promise<void> {
         try {
-            this.closeWithoutSaving(uri);
-            await this.fileSystem.delete(uri.toString());
+            await Promise.all([
+                this.closeWithoutSaving(uri),
+                this.fileSystem.delete(uri.toString())
+            ]);
         } catch (e) {
             console.error(e);
         }
     }
 
+    /**
+     * Close widget without saving changes.
+     *
+     * @param uri URI of a selected resource.
+     */
     protected async closeWithoutSaving(uri: URI): Promise<void> {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pending: Promise<any>[] = [];
         for (const [, widget] of NavigatableWidget.getAffected(this.shell.widgets, uri)) {
-            if (SaveableWidget.is(widget)) {
-                widget.closeWithoutSaving();
-            } else {
-                widget.close();
-            }
+            pending.push(this.shell.closeWidget(widget.id, { save: false }));
         }
+        await Promise.all(pending);
     }
 
 }

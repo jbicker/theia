@@ -14,24 +14,36 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { inject, injectable } from 'inversify';
-import { MenuPath } from '../../common/menu';
-import { ContextMenuRenderer, Anchor } from '../context-menu-renderer';
+import { Menu } from '../widgets';
+import { ContextMenuAccess, ContextMenuRenderer, RenderContextMenuOptions } from '../context-menu-renderer';
 import { BrowserMainMenuFactory } from './browser-menu-plugin';
 
-@injectable()
-export class BrowserContextMenuRenderer implements ContextMenuRenderer {
+export class BrowserContextMenuAccess extends ContextMenuAccess {
+    constructor(
+        public readonly menu: Menu
+    ) {
+        super(menu);
+    }
+}
 
-    constructor( @inject(BrowserMainMenuFactory) private menuFactory: BrowserMainMenuFactory) {
+@injectable()
+export class BrowserContextMenuRenderer extends ContextMenuRenderer {
+
+    constructor(@inject(BrowserMainMenuFactory) private menuFactory: BrowserMainMenuFactory) {
+        super();
     }
 
-    render(menuPath: MenuPath, anchor: Anchor, onHide?: () => void): void {
-        const contextMenu = this.menuFactory.createContextMenu(menuPath);
-        const { x, y } = anchor instanceof MouseEvent ? { x: anchor.clientX, y: anchor.clientY } : anchor;
+    protected doRender({ menuPath, anchor, args, onHide }: RenderContextMenuOptions): BrowserContextMenuAccess {
+        const contextMenu = this.menuFactory.createContextMenu(menuPath, args);
+        const { x, y } = anchor instanceof MouseEvent ? { x: anchor.clientX, y: anchor.clientY } : anchor!;
         if (onHide) {
-            contextMenu.aboutToClose.connect(() => onHide());
+            contextMenu.aboutToClose.connect(() => onHide!());
         }
         contextMenu.open(x, y);
+        return new BrowserContextMenuAccess(contextMenu);
     }
 
 }

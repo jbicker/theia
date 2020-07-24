@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
+ * Copyright (C) 2019 TypeFox and others.
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License v. 2.0 which is available at
@@ -16,69 +16,58 @@
 
 import * as React from 'react';
 import { DebugProtocol } from 'vscode-debugprotocol/lib/debugProtocol';
-import { RecursivePartial } from '@theia/core';
 import URI from '@theia/core/lib/common/uri';
-import { EditorManager, Range } from '@theia/editor/lib/browser';
-import { LabelProvider, DISABLED_CLASS, WidgetOpenerOptions } from '@theia/core/lib/browser';
+import { EditorManager } from '@theia/editor/lib/browser';
+import { LabelProvider, DISABLED_CLASS } from '@theia/core/lib/browser';
 import { TreeElement } from '@theia/core/lib/browser/source-tree';
 import { DebugSession } from '../debug-session';
-import { SourceBreakpoint } from '../breakpoint/breakpoint-marker';
-import { DebugSource } from './debug-source';
+import { BaseBreakpoint } from '../breakpoint/breakpoint-marker';
 import { BreakpointManager } from '../breakpoint/breakpoint-manager';
 
 export class DebugBreakpointData {
     readonly raw?: DebugProtocol.Breakpoint;
-    readonly origins: SourceBreakpoint[];
 }
 
-export class DebugBreakpoint extends DebugBreakpointData implements TreeElement {
+export class DebugBreakpointOptions {
+    readonly labelProvider: LabelProvider;
+    readonly breakpoints: BreakpointManager;
+    readonly editorManager: EditorManager;
+    readonly session?: DebugSession;
+}
 
-    readonly uri: URI;
+export class DebugBreakpointDecoration {
+    readonly className: string;
+    readonly message: string[];
+}
+
+export abstract class DebugBreakpoint<T extends BaseBreakpoint = BaseBreakpoint> extends DebugBreakpointOptions implements TreeElement {
+
+    readonly raw?: DebugProtocol.Breakpoint;
 
     constructor(
-        origin: SourceBreakpoint,
-        protected readonly labelProvider: LabelProvider,
-        protected readonly breakpoints: BreakpointManager,
-        protected readonly editorManager: EditorManager,
-        protected readonly session?: DebugSession
+        readonly uri: URI,
+        options: DebugBreakpointOptions
     ) {
         super();
-        Object.assign(this, { origins: [origin] });
-        this.uri = new URI(this.origins[0].uri);
+        Object.assign(this, options);
     }
-    update(data: Partial<DebugBreakpointData>): void {
+
+    abstract get origin(): T;
+
+    update(data: DebugBreakpointData): void {
         Object.assign(this, data);
     }
 
-    get origin(): SourceBreakpoint {
-        return this.origins[0];
+    get idFromAdapter(): number | undefined {
+        return this.raw && this.raw.id;
     }
 
-    get id(): number | undefined {
-        return this.raw && this.raw.id;
+    get id(): string {
+        return this.origin.id;
     }
 
     get enabled(): boolean {
         return this.breakpoints.breakpointsEnabled && this.origin.enabled;
-    }
-    setEnabled(enabled: boolean): void {
-        const { uri, raw } = this;
-        let shouldUpdate = false;
-        let breakpoints = raw && this.doRemove(this.origins.filter(origin => origin.raw.line !== raw.line));
-        if (breakpoints) {
-            shouldUpdate = true;
-        } else {
-            breakpoints = this.breakpoints.getBreakpoints(uri);
-        }
-        for (const breakpoint of breakpoints) {
-            if (breakpoint.raw.line === this.origin.raw.line && breakpoint.enabled !== enabled) {
-                breakpoint.enabled = enabled;
-                shouldUpdate = true;
-            }
-        }
-        if (shouldUpdate) {
-            this.breakpoints.setBreakpoints(this.uri, breakpoints);
-        }
     }
 
     get installed(): boolean {
@@ -88,97 +77,75 @@ export class DebugBreakpoint extends DebugBreakpointData implements TreeElement 
     get verified(): boolean {
         return !!this.raw ? this.raw.verified : true;
     }
+
     get message(): string {
         return this.raw && this.raw.message || '';
     }
 
-    /** 1-based */
-    get line(): number {
-        return this.raw && this.raw.line || this.origins[0].raw.line;
-    }
-    get column(): number | undefined {
-        return this.raw && this.raw.column || this.origins[0].raw.column;
-    }
-    get endLine(): number | undefined {
-        return this.raw && this.raw.endLine;
-    }
-    get endColumn(): number | undefined {
-        return this.raw && this.raw.endColumn;
-    }
+    abstract setEnabled(enabled: boolean): void;
 
-    get source(): DebugSource | undefined {
-        return this.raw && this.raw.source && this.session && this.session.getSource(this.raw.source);
-    }
-
-    async open(options: WidgetOpenerOptions = {
-        mode: 'reveal'
-    }): Promise<void> {
-        const { line, column, endLine, endColumn } = this;
-        const selection: RecursivePartial<Range> = {
-            start: {
-                line: line - 1,
-                character: typeof column === 'number' ? column - 1 : undefined
-            }
-        };
-        if (typeof endLine === 'number') {
-            selection.end = {
-                line: endLine - 1,
-                character: typeof endColumn === 'number' ? endColumn - 1 : undefined
-            };
-        }
-        if (this.source) {
-            await this.source.open({
-                ...options,
-                selection
-            });
-        } else {
-            this.editorManager.open(this.uri, {
-                ...options,
-                selection
-            });
-        }
-    }
+    abstract remove(): void;
 
     protected readonly setBreakpointEnabled = (event: React.ChangeEvent<HTMLInputElement>) => {
         this.setEnabled(event.target.checked);
-    }
+    };
 
     render(): React.ReactNode {
         const classNames = ['theia-source-breakpoint'];
-        if (!this.breakpoints.breakpointsEnabled || !this.verified) {
+        if (!this.isEnabled()) {
             classNames.push(DISABLED_CLASS);
         }
-        return <div title={this.message} className={classNames.join(' ')}>
-            <input type='checkbox' checked={this.origins[0].enabled} onChange={this.setBreakpointEnabled} />
-            <span className='name'>{this.labelProvider.getName(this.uri)} </span>
-            <span className='path'>{this.labelProvider.getLongName(this.uri.parent)} </span>
-            <span className='line'>{this.line}</span>
+        const decoration = this.getDecoration();
+        return <div title={decoration.message.join('\n')} className={classNames.join(' ')}>
+            <span className={'theia-debug-breakpoint-icon ' + decoration.className} />
+            <input className='theia-input' type='checkbox' checked={this.origin.enabled} onChange={this.setBreakpointEnabled} />
+            {this.doRender()}
         </div>;
     }
 
-    remove(): void {
-        const breakpoints = this.doRemove(this.origins);
-        if (breakpoints) {
-            this.breakpoints.setBreakpoints(this.uri, breakpoints);
-        }
+    protected isEnabled(): boolean {
+        return this.breakpoints.breakpointsEnabled && this.verified;
     }
-    protected doRemove(origins: SourceBreakpoint[]): SourceBreakpoint[] | undefined {
-        if (!origins.length) {
-            return undefined;
+
+    protected abstract doRender(): React.ReactNode;
+
+    getDecoration(): DebugBreakpointDecoration {
+        if (!this.enabled) {
+            return this.getDisabledBreakpointDecoration();
         }
-        const { uri } = this;
-        const toRemove = new Set();
-        origins.forEach(origin => toRemove.add(origin.raw.line));
-        let shouldUpdate = false;
-        const breakpoints = this.breakpoints.findMarkers({
-            uri,
-            dataFilter: data => {
-                const result = !toRemove.has(data.raw.line);
-                shouldUpdate = shouldUpdate || !result;
-                return result;
+        if (this.installed && !this.verified) {
+            return this.getUnverifiedBreakpointDecoration();
+        }
+        return this.doGetDecoration();
+    }
+
+    protected getUnverifiedBreakpointDecoration(): DebugBreakpointDecoration {
+        const decoration = this.getBreakpointDecoration();
+        return {
+            className: decoration.className + '-unverified',
+            message: [this.message || 'Unverified ' + decoration.message[0]]
+        };
+    }
+
+    protected getDisabledBreakpointDecoration(message?: string): DebugBreakpointDecoration {
+        const decoration = this.getBreakpointDecoration();
+        return {
+            className: decoration.className + '-disabled',
+            message: [message || ('Disabled ' + decoration.message[0])]
+        };
+    }
+
+    protected doGetDecoration(messages: string[] = []): DebugBreakpointDecoration {
+        if (this.message) {
+            if (messages.length) {
+                messages[messages.length - 1].concat(', ' + this.message);
+            } else {
+                messages.push(this.message);
             }
-        }).map(({ data }) => data);
-        return shouldUpdate && breakpoints || undefined;
+        }
+        return this.getBreakpointDecoration(messages);
     }
+
+    protected abstract getBreakpointDecoration(message?: string[]): DebugBreakpointDecoration;
 
 }

@@ -40,7 +40,7 @@ export interface OpenHandler {
     readonly iconClass?: string;
     /**
      * Test whether this handler can open the given URI for given options.
-     * Return a positive number if this handler can open; otherwise it cannot.
+     * Return a nonzero number if this handler can open; otherwise it cannot.
      * Never reject.
      *
      * A returned value indicating a priority of this handler.
@@ -78,7 +78,7 @@ export interface OpenerService {
 }
 
 export async function open(openerService: OpenerService, uri: URI, options?: OpenerOptions): Promise<object | undefined> {
-    const opener = await openerService.getOpener(uri);
+    const opener = await openerService.getOpener(uri, options);
     return opener.open(uri, options);
 }
 
@@ -95,7 +95,7 @@ export class DefaultOpenerService implements OpenerService {
         if (handlers.length >= 1) {
             return handlers[0];
         }
-        return Promise.reject(`There is no opener for ${uri}.`);
+        return Promise.reject(new Error(`There is no opener for ${uri}.`));
     }
 
     async getOpeners(uri?: URI, options?: OpenerOptions): Promise<OpenHandler[]> {

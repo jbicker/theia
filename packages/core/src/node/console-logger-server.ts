@@ -17,12 +17,11 @@
 import { inject, injectable, postConstruct } from 'inversify';
 import { LoggerWatcher } from '../common/logger-watcher';
 import { LogLevelCliContribution } from './logger-cli-contribution';
-import { ILoggerServer, ILoggerClient, LogLevel, ConsoleLogger } from '../common/logger-protocol';
+import { ILoggerServer, ILoggerClient, ConsoleLogger } from '../common/logger-protocol';
 
 @injectable()
 export class ConsoleLoggerServer implements ILoggerServer {
 
-    protected readonly loggers = new Map<string, number>();
     protected client: ILoggerClient | undefined = undefined;
 
     @inject(LoggerWatcher)
@@ -32,15 +31,13 @@ export class ConsoleLoggerServer implements ILoggerServer {
     protected cli: LogLevelCliContribution;
 
     @postConstruct()
-    protected init() {
+    protected init(): void {
         for (const name of Object.keys(this.cli.logLevels)) {
             this.setLogLevel(name, this.cli.logLevels[name]);
         }
-        this.cli.onLogConfigChanged(() => this.updateLogLevels());
     }
 
     async setLogLevel(name: string, newLogLevel: number): Promise<void> {
-        this.loggers.set(name, newLogLevel);
         const event = {
             loggerName: name,
             newLogLevel
@@ -52,10 +49,10 @@ export class ConsoleLoggerServer implements ILoggerServer {
     }
 
     async getLogLevel(name: string): Promise<number> {
-        return this.loggers.get(name) || this.cli.defaultLogLevel;
+        return this.cli.logLevelFor(name);
     }
 
-    // tslint:disable:no-any
+    /* eslint-disable @typescript-eslint/no-explicit-any */
     async log(name: string, logLevel: number, message: string, params: any[]): Promise<void> {
         const configuredLogLevel = await this.getLogLevel(name);
         if (logLevel >= configuredLogLevel) {
@@ -64,22 +61,13 @@ export class ConsoleLoggerServer implements ILoggerServer {
     }
 
     async child(name: string): Promise<void> {
-        this.setLogLevel(name, LogLevel.INFO);
+        this.setLogLevel(name, this.cli.logLevelFor(name));
     }
 
-    dispose(): void {
-        this.loggers.clear();
-    }
+    dispose(): void { }
 
-    setClient(client: ILoggerClient | undefined) {
+    setClient(client: ILoggerClient | undefined): void {
         this.client = client;
-    }
-
-    protected updateLogLevels() {
-        for (const loggerName of this.loggers.keys()) {
-            const newLevel = this.cli.logLevelFor(loggerName);
-            this.setLogLevel(loggerName, newLevel);
-        }
     }
 
 }

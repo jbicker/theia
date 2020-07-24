@@ -16,7 +16,7 @@
 
 import * as chai from 'chai';
 import { ConsoleLogger } from '../../node/messaging/logger';
-import { JsonRpcProxyFactory } from './proxy-factory';
+import { JsonRpcProxyFactory, JsonRpcProxy } from './proxy-factory';
 import { createMessageConnection } from 'vscode-jsonrpc/lib/main';
 import * as stream from 'stream';
 
@@ -24,8 +24,8 @@ const expect = chai.expect;
 
 class NoTransform extends stream.Transform {
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     public _transform(chunk: any, encoding: string, callback: Function): void {
-        // console.log((chunk as Buffer).toString())
         callback(undefined, chunk);
     }
 }
@@ -42,7 +42,7 @@ class TestServer {
     }
 
     fails2(arg: string, otherArg: string): Promise<string> {
-        return Promise.reject('fails2 failed');
+        return Promise.reject(new Error('fails2 failed'));
     }
 }
 
@@ -58,7 +58,7 @@ describe('Proxy-Factory', () => {
     it('Should correctly send notifications and requests.', done => {
         const it = getSetup();
         it.clientProxy.notifyThat('hello');
-        function check() {
+        function check(): void {
             if (it.client.notifications.length === 0) {
                 console.log('waiting another 50 ms');
                 setTimeout(check, 50);
@@ -92,7 +92,12 @@ describe('Proxy-Factory', () => {
     });
 });
 
-function getSetup() {
+function getSetup(): {
+    client: TestClient;
+    clientProxy: JsonRpcProxy<TestClient>;
+    server: TestServer;
+    serverProxy: JsonRpcProxy<TestServer>;
+} {
     const client = new TestClient();
     const server = new TestServer();
 

@@ -51,7 +51,11 @@ export class FileNavigatorTree extends FileTree {
     }
 
     async createWorkspaceRoot(rootFolder: FileStat, workspaceNode: WorkspaceNode): Promise<WorkspaceRootNode> {
-        return (await this.toNode(rootFolder, workspaceNode)) as WorkspaceRootNode;
+        const node = this.toNode(rootFolder, workspaceNode) as WorkspaceRootNode;
+        Object.assign(node, {
+            visible: workspaceNode.name !== WorkspaceNode.name,
+        });
+        return node;
     }
 }
 
@@ -63,13 +67,13 @@ export namespace WorkspaceNode {
     export const name = 'WorkspaceNode';
 
     export function is(node: TreeNode | undefined): node is WorkspaceNode {
-        return CompositeTreeNode.is(node) && node.name === WorkspaceNode.name;
+        return CompositeTreeNode.is(node) && node.id === WorkspaceNode.id;
     }
 
-    export function createRoot(): WorkspaceNode {
+    export function createRoot(multiRootName?: string): WorkspaceNode {
         return {
             id: WorkspaceNode.id,
-            name: WorkspaceNode.name,
+            name: multiRootName || WorkspaceNode.name,
             parent: undefined,
             children: [],
             visible: false,
@@ -82,7 +86,7 @@ export interface WorkspaceRootNode extends DirNode {
     parent: WorkspaceNode;
 }
 export namespace WorkspaceRootNode {
-    export function is(node: TreeNode | undefined): node is WorkspaceRootNode {
+    export function is(node: Object | undefined): node is WorkspaceRootNode {
         return DirNode.is(node) && WorkspaceNode.is(node.parent);
     }
 

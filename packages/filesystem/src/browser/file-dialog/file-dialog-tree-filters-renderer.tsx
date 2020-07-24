@@ -36,27 +36,25 @@ export class FileDialogTreeFilters {
 
 export class FileDialogTreeFiltersRenderer extends ReactRenderer {
 
+    readonly appliedFilters: FileDialogTreeFilters;
+
     constructor(
-        readonly filters: FileDialogTreeFilters,
+        readonly suppliedFilters: FileDialogTreeFilters,
         readonly fileDialogTree: FileDialogTree
     ) {
         super();
+        this.appliedFilters = { 'All Files': [], ...suppliedFilters, };
     }
 
     protected readonly handleFilterChanged = (e: React.ChangeEvent<HTMLSelectElement>) => this.onFilterChanged(e);
 
     protected doRender(): React.ReactNode {
-        if (!this.filters) {
+        if (!this.appliedFilters) {
             return undefined;
         }
 
-        const fileTypes = ['All Files'];
-        Object.keys(this.filters).forEach(element => {
-            fileTypes.push(element);
-        });
-
-        const options = fileTypes.map(value => this.renderLocation(value));
-        return <select className={FILE_TREE_FILTERS_LIST_CLASS} onChange={this.handleFilterChanged}>{...options}</select>;
+        const options = Object.keys(this.appliedFilters).map(value => this.renderLocation(value));
+        return <select className={'theia-select ' + FILE_TREE_FILTERS_LIST_CLASS} onChange={this.handleFilterChanged}>{...options}</select>;
     }
 
     protected renderLocation(value: string): React.ReactNode {
@@ -67,7 +65,7 @@ export class FileDialogTreeFiltersRenderer extends ReactRenderer {
         const locationList = this.locationList;
         if (locationList) {
             const value = locationList.value;
-            const filters = this.filters[value];
+            const filters = this.appliedFilters[value];
             this.fileDialogTree.setFilter(filters);
         }
 

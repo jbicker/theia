@@ -14,17 +14,32 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { injectable, inject } from 'inversify';
+import { injectable, inject, postConstruct } from 'inversify';
 import { ProblemManager } from './problem-manager';
 import { ProblemMarker } from '../../common/problem-marker';
 import { ProblemTreeModel } from './problem-tree-model';
 import { MarkerInfoNode, MarkerNode, MarkerRootNode } from '../marker-tree';
-import { TreeWidget, TreeProps, ContextMenuRenderer, TreeNode, NodeProps, TreeModel } from '@theia/core/lib/browser';
+import {
+    TreeWidget, TreeProps, ContextMenuRenderer, TreeNode, NodeProps, TreeModel,
+    ApplicationShell, Navigatable, ExpandableTreeNode, SelectableTreeNode
+} from '@theia/core/lib/browser';
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import * as React from 'react';
+import { ProblemPreferences } from './problem-preferences';
+import { DisposableCollection } from '@theia/core/lib/common/disposable';
+
+export const PROBLEMS_WIDGET_ID = 'problems';
 
 @injectable()
 export class ProblemWidget extends TreeWidget {
+
+    protected readonly toDisposeOnCurrentWidgetChanged = new DisposableCollection();
+
+    @inject(ProblemPreferences)
+    protected readonly preferences: ProblemPreferences;
+
+    @inject(ApplicationShell)
+    protected readonly shell: ApplicationShell;
 
     constructor(
         @inject(ProblemManager) protected readonly problemManager: ProblemManager,
@@ -34,7 +49,7 @@ export class ProblemWidget extends TreeWidget {
     ) {
         super(treeProps, model, contextMenuRenderer);
 
-        this.id = 'problems';
+        this.id = PROBLEMS_WIDGET_ID;
         this.title.label = 'Problems';
         this.title.caption = 'Problems';
         this.title.iconClass = 'fa problem-tab-icon';
@@ -42,6 +57,42 @@ export class ProblemWidget extends TreeWidget {
         this.addClass('theia-marker-container');
 
         this.addClipboardListener(this.node, 'copy', e => this.handleCopy(e));
+    }
+
+    @postConstruct()
+    protected init(): void {
+        super.init();
+        this.updateFollowActiveEditor();
+        this.toDispose.push(this.preferences.onPreferenceChanged(e => {
+            if (e.preferenceName === 'problems.autoReveal') {
+                this.updateFollowActiveEditor();
+            }
+        }));
+    }
+
+    protected updateFollowActiveEditor(): void {
+        this.toDisposeOnCurrentWidgetChanged.dispose();
+        this.toDispose.push(this.toDisposeOnCurrentWidgetChanged);
+        if (this.preferences.get('problems.autoReveal')) {
+            this.followActiveEditor();
+        }
+    }
+
+    protected followActiveEditor(): void {
+        this.autoRevealFromActiveEditor();
+        this.toDisposeOnCurrentWidgetChanged.push(this.shell.onDidChangeCurrentWidget(() => this.autoRevealFromActiveEditor()));
+    }
+
+    protected autoRevealFromActiveEditor(): void {
+        const widget = this.shell.currentWidget;
+        if (widget && Navigatable.is(widget)) {
+            const uri = widget.getResourceUri();
+            const node = uri && this.model.getNode(uri.toString());
+            if (ExpandableTreeNode.is(node) && SelectableTreeNode.is(node)) {
+                this.model.expandNode(node);
+                this.model.selectNode(node);
+            }
+        }
     }
 
     storeState(): object {
@@ -55,14 +106,38 @@ export class ProblemWidget extends TreeWidget {
         // no-op
     }
     protected superRestoreState(state: object): void {
-        return super.restoreState(state);
+        super.restoreState(state);
+        return;
     }
 
-    protected handleCopy(event: ClipboardEvent) {
+    protected handleClickEvent(node: TreeNode | undefined, event: React.MouseEvent<HTMLElement>): void {
+        super.handleClickEvent(node, event);
+        if (MarkerNode.is(node)) {
+            this.model.revealNode(node);
+        }
+    }
+
+    protected handleCopy(event: ClipboardEvent): void {
         const uris = this.model.selectedNodes.filter(MarkerNode.is).map(node => node.uri.toString());
-        if (uris.length > 0) {
+        if (uris.length > 0 && event.clipboardData) {
             event.clipboardData.setData('text/plain', uris.join('\n'));
             event.preventDefault();
+        }
+    }
+
+    protected handleDown(event: KeyboardEvent): void {
+        const node = this.model.getNextSelectableNode();
+        super.handleDown(event);
+        if (MarkerNode.is(node)) {
+            this.model.revealNode(node);
+        }
+    }
+
+    protected handleUp(event: KeyboardEvent): void {
+        const node = this.model.getPrevSelectableNode();
+        super.handleUp(event);
+        if (MarkerNode.is(node)) {
+            this.model.revealNode(node);
         }
     }
 
@@ -70,7 +145,7 @@ export class ProblemWidget extends TreeWidget {
         if (MarkerRootNode.is(model.root) && model.root.children.length > 0) {
             return super.renderTree(model);
         }
-        return <div className='noMarkers'>No problems have been detected in the workspace so far.</div>;
+        return <div className='theia-widget-noInfo noMarkers'>No problems have been detected in the workspace so far.</div>;
     }
 
     protected renderCaption(node: TreeNode, props: NodeProps): React.ReactNode {
@@ -82,7 +157,7 @@ export class ProblemWidget extends TreeWidget {
         return 'caption';
     }
 
-    protected renderTailDecorations(node: TreeNode, props: NodeProps) {
+    protected renderTailDecorations(node: TreeNode, props: NodeProps): JSX.Element {
         return <div className='row-button-container'>
             {this.renderRemoveButton(node)}
         </div>;
@@ -99,19 +174,19 @@ export class ProblemWidget extends TreeWidget {
             if (problemMarker.data.severity) {
                 severityClass = this.getSeverityClass(problemMarker.data.severity);
             }
-            return <div className='markerNode'>
+            return <div
+                className='markerNode'
+                title={`${problemMarker.data.message} (${problemMarker.data.range.start.line + 1}, ${problemMarker.data.range.start.character + 1})`}>
                 <div>
                     <i className={severityClass}></i>
                 </div>
-                <div className='owner'>
-                    {'[' + problemMarker.owner + ']'}
-                </div>
                 <div className='message'>{problemMarker.data.message}
-                    {
-                        (problemMarker.data.code) ? <span className='code'>{'[' + problemMarker.data.code + ']'}</span> : ''
-                    }
+                    <span className='owner'>
+                        {(problemMarker.data.source || problemMarker.owner)}
+                        {problemMarker.data.code ? `(${problemMarker.data.code})` : ''}
+                    </span>
                     <span className='position'>
-                        {'(' + (problemMarker.data.range.start.line + 1) + ', ' + (problemMarker.data.range.start.character + 1) + ')'}
+                        {'[' + (problemMarker.data.range.start.line + 1) + ', ' + (problemMarker.data.range.start.character + 1) + ']'}
                     </span>
                 </div>
             </div>;
@@ -129,11 +204,18 @@ export class ProblemWidget extends TreeWidget {
     }
 
     protected decorateMarkerFileNode(node: MarkerInfoNode): React.ReactNode {
-        return <div className='markerFileNode'>
-            <div className={(node.icon || '') + ' file-icon'}></div>
-            <div>{node.name}</div>
-            <div className='path'>{node.description || ''}</div>
-            <div className='counter'>{node.numberOfMarkers.toString()}</div>
+        const icon = this.toNodeIcon(node);
+        const name = this.toNodeName(node);
+        const description = this.toNodeDescription(node);
+        // Use a custom scheme so that we fallback to the `DefaultUriLabelProviderContribution`.
+        const path = this.labelProvider.getLongName(node.uri.withScheme('marker'));
+        return <div title={path} className='markerFileNode'>
+            {icon && <div className={icon + ' file-icon'}></div>}
+            <div className='name'>{name}</div>
+            <div className='path'>{description}</div>
+            <div className='notification-count-container'>
+                <span className='notification-count'>{node.numberOfMarkers.toString()}</span>
+            </div>
         </div>;
     }
 
@@ -146,7 +228,7 @@ export class ProblemMarkerRemoveButton extends React.Component<{ model: ProblemT
     }
 
     protected readonly remove = (e: React.MouseEvent<HTMLElement>) => this.doRemove(e);
-    protected doRemove(e: React.MouseEvent<HTMLElement>) {
+    protected doRemove(e: React.MouseEvent<HTMLElement>): void {
         this.props.model.removeNode(this.props.node);
         e.stopPropagation();
     }

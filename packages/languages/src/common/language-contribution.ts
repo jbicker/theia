@@ -20,7 +20,14 @@ export interface LanguageContribution {
 }
 
 export namespace LanguageContribution {
-    export function getPath(contribution: LanguageContribution): string {
-        return '/services/languages/' + contribution.id;
+    export const servicePath = '/services/languages';
+    export function getPath(contribution: LanguageContribution, sessionId: string = ':id'): string {
+        return servicePath + '/' + contribution.id + '/' + sessionId;
+    }
+    export const Service = Symbol('LanguageContributionService');
+    export interface Service {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        create(contributionId: string, parameters: any): Promise<string>;
+        destroy(sessionId: string): Promise<void>;
     }
 }

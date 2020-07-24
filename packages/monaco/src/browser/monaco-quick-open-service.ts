@@ -14,15 +14,22 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { injectable, inject } from 'inversify';
+import { injectable, inject, optional, postConstruct } from 'inversify';
+import { MessageType } from '@theia/core/lib/common/message-service-protocol';
 import {
-    QuickOpenService, QuickOpenModel, QuickOpenOptions,
-    QuickOpenItem, QuickOpenGroupItem, QuickOpenMode, KeySequence
+    QuickOpenService, QuickOpenOptions, QuickOpenItem, QuickOpenGroupItem,
+    QuickOpenMode, KeySequence, KeybindingRegistry
 } from '@theia/core/lib/browser';
-import { KEY_CODE_MAP } from './monaco-keycode-map';
-import { ILogger } from '@theia/core';
+import { QuickOpenModel, QuickOpenActionProvider, QuickOpenAction } from '@theia/core/lib/common/quick-open-model';
+import { ContextKey } from '@theia/core/lib/browser/context-key-service';
+import { MonacoContextKeyService } from './monaco-context-key-service';
+import { QuickOpenHideReason } from '@theia/core/lib/common/quick-open-service';
+import { MonacoResolvedKeybinding } from './monaco-resolved-keybinding';
+import { BrowserMenuBarContribution } from '@theia/core/lib/browser/menu/browser-menu-plugin';
 
 export interface MonacoQuickOpenControllerOpts extends monaco.quickOpen.IQuickOpenControllerOpts {
+    valueSelection?: Readonly<[number, number]>;
+    enabled?: boolean;
     readonly prefix?: string;
     readonly password?: boolean;
     readonly ignoreFocusOut?: boolean;
@@ -37,8 +44,20 @@ export class MonacoQuickOpenService extends QuickOpenService {
     protected _widget: monaco.quickOpen.QuickOpenWidget | undefined;
     protected opts: MonacoQuickOpenControllerOpts | undefined;
     protected previousActiveElement: Element | undefined;
+    protected _widgetNode: HTMLElement;
 
-    constructor(@inject(ILogger) protected readonly logger: ILogger) {
+    @inject(MonacoContextKeyService)
+    protected readonly contextKeyService: MonacoContextKeyService;
+
+    @inject(KeybindingRegistry)
+    protected readonly keybindingRegistry: KeybindingRegistry;
+
+    @inject(BrowserMenuBarContribution) @optional()
+    protected readonly browserMenuBarContribution?: BrowserMenuBarContribution;
+
+    protected inQuickOpenKey: ContextKey<boolean>;
+
+    constructor() {
         super();
         const overlayWidgets = document.createElement('div');
         overlayWidgets.classList.add('quick-open-overlay');
@@ -48,19 +67,129 @@ export class MonacoQuickOpenService extends QuickOpenService {
         container.style.position = 'absolute';
         container.style.top = '0px';
         container.style.right = '50%';
+        container.style.zIndex = '1000000';
         overlayWidgets.appendChild(container);
     }
 
+    @postConstruct()
+    protected init(): void {
+        this.inQuickOpenKey = this.contextKeyService.createKey<boolean>('inQuickOpen', false);
+    }
+
     open(model: QuickOpenModel, options?: QuickOpenOptions): void {
-        this.internalOpen(new MonacoQuickOpenControllerOptsImpl(model, options));
+        this.internalOpen(new MonacoQuickOpenControllerOptsImpl(model, this.keybindingRegistry, options));
+    }
+
+    hide(reason?: QuickOpenHideReason): void {
+        let hideReason: monaco.quickOpen.HideReason | undefined;
+        switch (reason) {
+            case QuickOpenHideReason.ELEMENT_SELECTED:
+                hideReason = monaco.quickOpen.HideReason.ELEMENT_SELECTED;
+                break;
+            case QuickOpenHideReason.FOCUS_LOST:
+                hideReason = monaco.quickOpen.HideReason.FOCUS_LOST;
+                break;
+            case QuickOpenHideReason.CANCELED:
+                hideReason = monaco.quickOpen.HideReason.CANCELED;
+                break;
+        }
+        this.widget.hide(hideReason);
+    }
+
+    showDecoration(type: MessageType): void {
+        let decoration = monaco.MarkerSeverity.Info;
+        if (type === MessageType.Warning) {
+            decoration = monaco.MarkerSeverity.Warning;
+        } else if (type === MessageType.Error) {
+            decoration = monaco.MarkerSeverity.Error;
+        }
+        this.showInputDecoration(decoration);
+    }
+    hideDecoration(): void {
+        this.clearInputDecoration();
+    }
+
+    refresh(): void {
+        const inputBox = this.widget.inputBox;
+        if (inputBox) {
+            this.onType(inputBox.inputElement.value);
+        }
     }
 
     internalOpen(opts: MonacoQuickOpenControllerOpts): void {
+        const browserMenuBarContribution = this.browserMenuBarContribution;
+        if (browserMenuBarContribution) {
+            const browserMenuBar = browserMenuBarContribution.menuBar;
+            if (browserMenuBar) {
+                const activeMenu = browserMenuBar.activeMenu;
+                if (activeMenu) {
+                    activeMenu.close();
+                }
+            }
+        }
+
+        // eslint-disable-next-line no-null/no-null
+        if (this.widgetNode && this.widgetNode.offsetParent !== null) {
+            this.hide();
+        }
         this.opts = opts;
-        this.previousActiveElement = window.document.activeElement || undefined;
+        const activeContext = window.document.activeElement || undefined;
+        if (!activeContext || !this.container.contains(activeContext)) {
+            this.previousActiveElement = activeContext;
+            this.contextKeyService.activeContext = activeContext instanceof HTMLElement ? activeContext : undefined;
+        }
+
+        this.hideDecoration();
         this.widget.show(this.opts.prefix || '');
         this.setPlaceHolder(opts.inputAriaLabel);
         this.setPassword(opts.password ? true : false);
+        this.setEnabled(opts.enabled);
+        this.setValueSelected(opts.inputAriaLabel, opts.valueSelection);
+        this.inQuickOpenKey.set(true);
+
+        const widget = this.widget;
+        if (widget.inputBox) {
+            widget.inputBox.inputElement.tabIndex = 1;
+            // Position the cursor at the end of the input unless a user has made a selection.
+            if (widget.inputBox.inputElement.selectionStart === widget.inputBox.inputElement.selectionEnd) {
+                widget.inputBox.inputElement.selectionStart = widget.inputBox.inputElement.value.length;
+            }
+        }
+    }
+
+    setValueSelected(value: string | undefined, selectLocation: Readonly<[number, number]> | undefined): void {
+        if (!value) {
+            return;
+        }
+
+        const widget = this.widget;
+        if (widget.inputBox) {
+
+            if (!selectLocation) {
+                widget.inputBox.inputElement.setSelectionRange(0, value.length);
+                return;
+            }
+
+            if (selectLocation[0] === selectLocation[1]) {
+                widget.inputBox.inputElement.setSelectionRange(selectLocation[0], selectLocation[0]);
+                return;
+            }
+
+            widget.inputBox.inputElement.setSelectionRange(selectLocation[0], selectLocation[1]);
+        }
+    }
+
+    setEnabled(isEnabled: boolean | undefined): void {
+        const widget = this.widget;
+        if (widget.inputBox) {
+            widget.inputBox.inputElement.readOnly = (isEnabled !== undefined) ? !isEnabled : false;
+        }
+    }
+
+    setValue(value: string | undefined): void {
+        if (this.widget && this.widget.inputBox) {
+            this.widget.inputBox.inputElement.value = (value !== undefined) ? value : '';
+        }
     }
 
     setPlaceHolder(placeHolder: string): void {
@@ -97,24 +226,50 @@ export class MonacoQuickOpenService extends QuickOpenService {
         if (this._widget) {
             return this._widget;
         }
-        this._widget = new monaco.quickOpen.QuickOpenWidget(this.container, {
+        const widget = this._widget = new monaco.quickOpen.QuickOpenWidget(this.container, {
             onOk: () => {
                 this.previousActiveElement = undefined;
+                this.contextKeyService.activeContext = undefined;
                 this.onClose(false);
             },
             onCancel: () => {
                 if (this.previousActiveElement instanceof HTMLElement) {
-                    this.previousActiveElement.focus();
+                    this.previousActiveElement.focus({ preventScroll: true });
                 }
                 this.previousActiveElement = undefined;
+                this.contextKeyService.activeContext = undefined;
                 this.onClose(true);
             },
             onType: lookFor => this.onType(lookFor || ''),
-            onFocusLost: () => (this.opts && this.opts.ignoreFocusOut !== undefined) ? this.opts.ignoreFocusOut : false
+            onFocusLost: () => {
+                if (this.opts && this.opts.ignoreFocusOut !== undefined) {
+                    if (this.opts.ignoreFocusOut === false) {
+                        this.onClose(true);
+                    }
+                    return this.opts.ignoreFocusOut;
+                } else {
+                    return false;
+                }
+            }
         }, {});
         this.attachQuickOpenStyler();
-        this._widget.create();
-        return this._widget;
+        this._widgetNode = widget.create();
+        widget.tree.onDidChangeFocus(() => this.onDidChangeActiveEmitter.fire(this.getActive()));
+        return widget;
+    }
+
+    get widgetNode(): HTMLElement {
+        return this._widgetNode;
+    }
+
+    getActive(): QuickOpenItem[] {
+        if (this._widget && this._widget.isVisible()) {
+            const focus = this._widget.tree.getFocus();
+            if (focus instanceof QuickOpenEntry) {
+                return [focus.item];
+            }
+        }
+        return [];
     }
 
     protected attachQuickOpenStyler(): void {
@@ -134,6 +289,7 @@ export class MonacoQuickOpenService extends QuickOpenService {
         if (this.opts && this.opts.onClose) {
             this.opts.onClose(cancelled);
         }
+        this.inQuickOpenKey.set(false);
     }
 
     protected async onType(lookFor: string): Promise<void> {
@@ -154,28 +310,43 @@ export class MonacoQuickOpenService extends QuickOpenService {
 export class MonacoQuickOpenControllerOptsImpl implements MonacoQuickOpenControllerOpts {
 
     protected readonly options: QuickOpenOptions.Resolved;
+    readonly password?: boolean;
 
     constructor(
         protected readonly model: QuickOpenModel,
+        protected readonly keybindingService: KeybindingRegistry,
         options?: QuickOpenOptions
     ) {
         this.model = model;
         this.options = QuickOpenOptions.resolve(options);
+        this.password = this.options.password;
+    }
+
+    get enabled(): boolean {
+        return this.options.enabled;
     }
 
     get prefix(): string {
         return this.options.prefix;
     }
 
+    get ignoreFocusOut(): boolean {
+        return this.options.ignoreFocusOut;
+    }
+
     get inputAriaLabel(): string {
-        return this.options.placeholder;
+        return this.options.placeholder || '';
+    }
+
+    get valueSelection(): Readonly<[number, number]> {
+        return this.options.valueSelection || [-1, -1];
     }
 
     onClose(cancelled: boolean): void {
         this.options.onClose(cancelled);
     }
 
-    private toOpenModel(lookFor: string, items: QuickOpenItem[]): monaco.quickOpen.QuickOpenModel {
+    protected toOpenModel(lookFor: string, items: QuickOpenItem[], actionProvider?: QuickOpenActionProvider): monaco.quickOpen.QuickOpenModel {
         const entries: monaco.quickOpen.QuickOpenEntry[] = [];
         for (const item of items) {
             const entry = this.createEntry(item, lookFor);
@@ -186,7 +357,7 @@ export class MonacoQuickOpenControllerOptsImpl implements MonacoQuickOpenControl
         if (this.options.fuzzySort) {
             entries.sort((a, b) => monaco.quickOpen.compareEntries(a, b, lookFor));
         }
-        return new monaco.quickOpen.QuickOpenModel(entries);
+        return new monaco.quickOpen.QuickOpenModel(entries, actionProvider ? new MonacoQuickOpenActionProvider(actionProvider) : undefined);
     }
 
     getModel(lookFor: string): monaco.quickOpen.QuickOpenModel {
@@ -194,8 +365,8 @@ export class MonacoQuickOpenControllerOptsImpl implements MonacoQuickOpenControl
     }
 
     onType(lookFor: string, acceptor: (model: monaco.quickOpen.QuickOpenModel) => void): void {
-        this.model.onType(lookFor, items => {
-            const result = this.toOpenModel(lookFor, items);
+        this.model.onType(lookFor, (items, actionProvider) => {
+            const result = this.toOpenModel(lookFor, items, actionProvider);
             acceptor(result);
         });
     }
@@ -204,23 +375,30 @@ export class MonacoQuickOpenControllerOptsImpl implements MonacoQuickOpenControl
         if (this.options.skipPrefix) {
             lookFor = lookFor.substr(this.options.skipPrefix);
         }
-        const labelHighlights = this.options.fuzzyMatchLabel ? this.matchesFuzzy(lookFor, item.getLabel()) : item.getLabelHighlights();
-        const descriptionHighlights = this.options.fuzzyMatchDescription ? this.matchesFuzzy(lookFor, item.getDescription()) : item.getDescriptionHighlights();
-        const detailHighlights = this.options.fuzzyMatchDetail ? this.matchesFuzzy(lookFor, item.getDetail()) : item.getDetailHighlights();
+        if (this.options.trimInput) {
+            lookFor = lookFor.trim();
+        }
+        const { fuzzyMatchLabel, fuzzyMatchDescription, fuzzyMatchDetail } = this.options;
+        const labelHighlights = fuzzyMatchLabel ? this.matchesFuzzy(lookFor, item.getLabel(), fuzzyMatchLabel) : item.getLabelHighlights();
+        const descriptionHighlights = fuzzyMatchDescription ? this.matchesFuzzy(lookFor, item.getDescription(), fuzzyMatchDescription) : item.getDescriptionHighlights();
+        const detailHighlights = fuzzyMatchDetail ? this.matchesFuzzy(lookFor, item.getDetail(), fuzzyMatchDetail) : item.getDetailHighlights();
         if ((lookFor && !labelHighlights && !descriptionHighlights && !detailHighlights)
             && !this.options.showItemsWithoutHighlight) {
             return undefined;
         }
-        const entry = item instanceof QuickOpenGroupItem ? new QuickOpenEntryGroup(item) : new QuickOpenEntry(item);
+        const entry = item instanceof QuickOpenGroupItem
+            ? new QuickOpenEntryGroup(item, this.keybindingService)
+            : new QuickOpenEntry(item, this.keybindingService);
         entry.setHighlights(labelHighlights || [], descriptionHighlights, detailHighlights);
         return entry;
     }
 
-    protected matchesFuzzy(lookFor: string, value: string | undefined): monaco.quickOpen.IHighlight[] | undefined {
+    protected matchesFuzzy(lookFor: string, value: string | undefined, options?: QuickOpenOptions.FuzzyMatchOptions | boolean): monaco.quickOpen.IHighlight[] | undefined {
         if (!lookFor || !value) {
             return undefined;
         }
-        return monaco.filters.matchesFuzzy(lookFor, value, true);
+        const enableSeparateSubstringMatching = typeof options === 'object' && options.enableSeparateSubstringMatching;
+        return monaco.filters.matchesFuzzy(lookFor, value, enableSeparateSubstringMatching);
     }
 
     getAutoFocus(lookFor: string): monaco.quickOpen.IAutoFocus {
@@ -243,7 +421,8 @@ export class MonacoQuickOpenControllerOptsImpl implements MonacoQuickOpenControl
 export class QuickOpenEntry extends monaco.quickOpen.QuickOpenEntry {
 
     constructor(
-        public readonly item: QuickOpenItem
+        public readonly item: QuickOpenItem,
+        protected readonly keybindingService: KeybindingRegistry
     ) {
         super();
     }
@@ -252,8 +431,8 @@ export class QuickOpenEntry extends monaco.quickOpen.QuickOpenEntry {
         return this.item.getLabel();
     }
 
-    getAriaLabel(): string | undefined {
-        return this.item.getTooltip();
+    getAriaLabel(): string {
+        return this.item.getTooltip() || '';
     }
 
     getDetail(): string | undefined {
@@ -285,63 +464,21 @@ export class QuickOpenEntry extends monaco.quickOpen.QuickOpenEntry {
 
         let keySequence: KeySequence;
         try {
-            keySequence = KeySequence.parse(keybinding.keybinding);
+            keySequence = this.keybindingService.resolveKeybinding(keybinding);
         } catch (error) {
             return undefined;
         }
-
-        if (keySequence.length < 2) {
-            const keyCode = keySequence[0];
-            if (keyCode.key !== undefined) { // This should not happen.
-                const simple = new monaco.keybindings.SimpleKeybinding(
-                    keyCode.ctrl,
-                    keyCode.shift,
-                    keyCode.alt,
-                    keyCode.meta,
-                    KEY_CODE_MAP[keyCode.key.keyCode]
-                );
-                return new monaco.keybindings.USLayoutResolvedKeybinding(simple, monaco.platform.OS);
-            }
-        } else if (keySequence.length === 2) {
-            /* FIXME only 2 keycodes are supported by monaco.  */
-            const first = keySequence[0];
-            const second = keySequence[1];
-
-            if (first.key !== undefined && second.key !== undefined) {
-                const firstPart = new monaco.keybindings.SimpleKeybinding(
-                    first.ctrl,
-                    first.shift,
-                    first.alt,
-                    first.meta,
-                    KEY_CODE_MAP[first.key.keyCode]
-                );
-
-                const secondPart = new monaco.keybindings.SimpleKeybinding(
-                    second.ctrl,
-                    second.shift,
-                    second.alt,
-                    second.meta,
-                    KEY_CODE_MAP[second.key.keyCode]
-                );
-
-                return new monaco.keybindings.USLayoutResolvedKeybinding(
-                    new monaco.keybindings.ChordKeybinding(firstPart, secondPart),
-                    monaco.platform.OS);
-            }
-        } else {
-            return undefined;
-        }
-
+        return new MonacoResolvedKeybinding(keySequence, this.keybindingService);
     }
 
     run(mode: monaco.quickOpen.Mode): boolean {
-        if (mode === monaco.quickOpen.Mode.OPEN) {
+        if (mode === 1) {
             return this.item.run(QuickOpenMode.OPEN);
         }
-        if (mode === monaco.quickOpen.Mode.OPEN_IN_BACKGROUND) {
+        if (mode === 2) {
             return this.item.run(QuickOpenMode.OPEN_IN_BACKGROUND);
         }
-        if (mode === monaco.quickOpen.Mode.PREVIEW) {
+        if (mode === 0) {
             return this.item.run(QuickOpenMode.PREVIEW);
         }
         return false;
@@ -352,9 +489,10 @@ export class QuickOpenEntry extends monaco.quickOpen.QuickOpenEntry {
 export class QuickOpenEntryGroup extends monaco.quickOpen.QuickOpenEntryGroup {
 
     constructor(
-        public readonly item: QuickOpenGroupItem
+        public readonly item: QuickOpenGroupItem,
+        protected readonly keybindingService: KeybindingRegistry
     ) {
-        super(new QuickOpenEntry(item));
+        super(new QuickOpenEntry(item, keybindingService));
     }
 
     getGroupLabel(): string {
@@ -365,4 +503,61 @@ export class QuickOpenEntryGroup extends monaco.quickOpen.QuickOpenEntryGroup {
         return this.item.showBorder();
     }
 
+    getKeybinding(): monaco.keybindings.ResolvedKeybinding | undefined {
+        const entry = this.getEntry();
+        return entry ? entry.getKeybinding() : super.getKeybinding();
+    }
+
+}
+
+export class MonacoQuickOpenAction implements monaco.editor.IAction {
+    constructor(public readonly action: QuickOpenAction) { }
+
+    get id(): string {
+        return this.action.id;
+    }
+
+    get label(): string {
+        return this.action.label || '';
+    }
+
+    get tooltip(): string {
+        return this.action.tooltip || '';
+    }
+
+    get class(): string | undefined {
+        return this.action.class;
+    }
+
+    get enabled(): boolean {
+        return this.action.enabled || true;
+    }
+
+    get checked(): boolean {
+        return this.action.checked || false;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    run(entry: QuickOpenEntry | QuickOpenEntryGroup): Promise<any> {
+        return this.action.run(entry.item);
+    }
+
+    dispose(): void {
+        this.action.dispose();
+    }
+}
+
+export class MonacoQuickOpenActionProvider implements monaco.quickOpen.IActionProvider {
+    constructor(public readonly provider: QuickOpenActionProvider) { }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    hasActions(element: any, entry: QuickOpenEntry | QuickOpenEntryGroup): boolean {
+        return this.provider.hasActions(entry.item);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    getActions(element: any, entry: QuickOpenEntry | QuickOpenEntryGroup): ReadonlyArray<monaco.editor.IAction> {
+        const actions = this.provider.getActions(entry.item);
+        return actions.map(action => new MonacoQuickOpenAction(action));
+    }
 }

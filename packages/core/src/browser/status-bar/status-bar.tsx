@@ -14,19 +14,20 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { CommandService } from '../../common';
-import { LabelParser, LabelIcon } from '../label-parser';
-import { injectable, inject } from 'inversify';
-import { FrontendApplicationStateService } from '../frontend-application-state';
-import { ReactWidget } from '../widgets/react-widget';
 import * as React from 'react';
+import { injectable, inject } from 'inversify';
+import Octicon, { getIconByName } from '@primer/octicons-react';
+import { CommandService } from '../../common';
+import { ReactWidget } from '../widgets/react-widget';
+import { FrontendApplicationStateService } from '../frontend-application-state';
+import { LabelParser, LabelIcon } from '../label-parser';
 
 export interface StatusBarEntry {
     /**
-     * For icons we use fontawesome. Get more information and the class names
+     * For icons we use octicons and fontawesome icons. octicons take precedence over fontawesome. Get more information and the class names
      * here: http://fontawesome.io/icons/
      * To set a text with icon use the following pattern in text string:
-     * $(fontawesomeClasssName)
+     * $(fontawesomeClassName)
      * To use animated icons use the following pattern:
      * $(fontawesomeClassName~typeOfAnimation)
      * Type of animation can be either spin or pulse.
@@ -39,7 +40,7 @@ export interface StatusBarEntry {
     className?: string;
     tooltip?: string;
     command?: string;
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     arguments?: any[];
     priority?: number;
     onclick?: (e: MouseEvent) => void;
@@ -62,6 +63,7 @@ export const StatusBar = Symbol('StatusBar');
 
 export interface StatusBar {
     setBackgroundColor(color?: string): Promise<void>;
+    setColor(color?: string): Promise<void>;
     setElement(id: string, entry: StatusBarEntry): Promise<void>;
     removeElement(id: string): Promise<void>;
 }
@@ -70,6 +72,7 @@ export interface StatusBar {
 export class StatusBarImpl extends ReactWidget implements StatusBar {
 
     protected backgroundColor: string | undefined;
+    protected color: string | undefined;
     protected entries: Map<string, StatusBarEntry> = new Map();
 
     constructor(
@@ -80,6 +83,7 @@ export class StatusBarImpl extends ReactWidget implements StatusBar {
         super();
         delete this.scrollOptions;
         this.id = 'theia-statusBar';
+        this.addClass('noselect');
     }
 
     protected get ready(): Promise<void> {
@@ -101,27 +105,37 @@ export class StatusBarImpl extends ReactWidget implements StatusBar {
     async setBackgroundColor(color?: string): Promise<void> {
         await this.ready;
         this.internalSetBackgroundColor(color);
+        this.update();
     }
 
     protected internalSetBackgroundColor(color?: string): void {
         this.backgroundColor = color;
-        // tslint:disable-next-line:no-null-keyword
-        this.node.style.backgroundColor = this.backgroundColor ? this.backgroundColor : null;
+        this.node.style.backgroundColor = this.backgroundColor || '';
+    }
+
+    async setColor(color?: string): Promise<void> {
+        await this.ready;
+        this.internalSetColor(color);
+        this.update();
+    }
+
+    protected internalSetColor(color?: string): void {
+        this.color = color;
     }
 
     protected render(): JSX.Element {
         const leftEntries: JSX.Element[] = [];
         const rightEntries: JSX.Element[] = [];
-        const elements = Array.from(this.entries.values()).sort((left, right) => {
-            const lp = left.priority || 0;
-            const rp = right.priority || 0;
+        const elements = Array.from(this.entries).sort((left, right) => {
+            const lp = left[1].priority || 0;
+            const rp = right[1].priority || 0;
             return rp - lp;
         });
-        elements.forEach(entry => {
+        elements.forEach(([id, entry]) => {
             if (entry.alignment === StatusBarAlignment.LEFT) {
-                leftEntries.push(this.renderElement(entry));
+                leftEntries.push(this.renderElement(id, entry));
             } else {
-                rightEntries.push(this.renderElement(entry));
+                rightEntries.push(this.renderElement(id, entry));
             }
         });
 
@@ -161,11 +175,9 @@ export class StatusBarImpl extends ReactWidget implements StatusBar {
             attrs.title = entry.tooltip;
         }
 
-        if (entry.color) {
-            attrs.style = {
-                color: entry.color
-            };
-        }
+        attrs.style = {
+            color: entry.color || this.color
+        };
 
         if (entry.className) {
             attrs.className += ' ' + entry.className;
@@ -174,22 +186,25 @@ export class StatusBarImpl extends ReactWidget implements StatusBar {
         return attrs;
     }
 
-    protected renderElement(entry: StatusBarEntry): JSX.Element {
+    protected renderElement(id: string, entry: StatusBarEntry): JSX.Element {
         const childStrings = this.entryService.parse(entry.text);
         const children: JSX.Element[] = [];
 
-        childStrings.forEach((val, idx) => {
-            const key = entry.alignment + '-' + idx;
+        childStrings.forEach((val, key) => {
             if (!(typeof val === 'string') && LabelIcon.is(val)) {
-                const classStr = `fa fa-${val.name} ${val.animation ? 'fa-' + val.animation : ''}`;
-                children.push(<span className={classStr} key={key}></span>);
+                const octicon = getIconByName(val.name);
+                if (octicon) {
+                    children.push(<span key={key} className={val.animation ? 'fa-' + val.animation : 'fa'}><Octicon icon={octicon} height={12.5} width={12.5} /></span>);
+                } else {
+                    children.push(<span key={key} className={`fa fa-${val.name} ${val.animation ? 'fa-' + val.animation : ''}`}></span>);
+                }
             } else {
                 children.push(<span key={key}>{val}</span>);
             }
         });
-        const elementInnerDiv = <div>{children}</div>;
+        const elementInnerDiv = <React.Fragment>{children}</React.Fragment>;
 
-        return React.createElement('div', { key: entry.text + entry.tooltip + entry.priority + entry.command, ...this.createAttributes(entry) }, elementInnerDiv);
+        return React.createElement('div', { key: id, ...this.createAttributes(entry) }, elementInnerDiv);
     }
 
 }

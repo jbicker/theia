@@ -14,9 +14,13 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+import * as temp from 'temp';
 import * as yargs from 'yargs';
 import { ApplicationPackageManager, rebuild } from '@theia/application-manager';
 import { ApplicationProps } from '@theia/application-package';
+import checkHoisted from './check-hoisting';
+import downloadPlugins from './download-plugins';
+import runTest from './run-test';
 
 process.on('unhandledRejection', (reason, promise) => {
     throw reason;
@@ -51,7 +55,7 @@ function rebuildCommand(command: string, target: ApplicationProps.Target): yargs
     };
 }
 
-(function () {
+(function (): void {
     const projectPath = process.cwd();
     const appTarget: ApplicationProps.Target = yargs.argv['app-target'];
     const manager = new ApplicationPackageManager({ projectPath, appTarget });
@@ -63,7 +67,7 @@ function rebuildCommand(command: string, target: ApplicationProps.Target): yargs
             describe: 'start the ' + manager.pck.target + ' backend',
             handler: async () => {
                 try {
-                    await manager.start(commandArgs('start'));
+                    manager.start(commandArgs('start'));
                 } catch (err) {
                     console.error(err);
                     process.exit(1);
@@ -118,9 +122,135 @@ function rebuildCommand(command: string, target: ApplicationProps.Target): yargs
         })
         .command(rebuildCommand('rebuild', target))
         .command(rebuildCommand('rebuild:browser', 'browser'))
-        .command(rebuildCommand('rebuild:electron', 'electron'));
+        .command(rebuildCommand('rebuild:electron', 'electron'))
+        .command({
+            command: 'check:hoisted',
+            describe: 'check that all dependencies are hoisted',
+            builder: {
+                'suppress': {
+                    alias: 's',
+                    describe: 'suppress exiting with failure code',
+                    boolean: true,
+                    default: false
+                }
+            },
+            handler: args => {
+                try {
+                    checkHoisted(args);
+                } catch (err) {
+                    console.error(err);
+                    process.exit(1);
+                }
+            }
+        })
+        .command({
+            command: 'download:plugins',
+            describe: 'Download defined external plugins.',
+            builder: {
+                'packed': {
+                    alias: 'p',
+                    describe: 'Controls whether to pack or unpack plugins',
+                    boolean: true,
+                    default: false,
+                }
+            },
+            handler: async args => {
+                try {
+                    await downloadPlugins(args);
+                } catch (err) {
+                    console.error(err);
+                    process.exit(1);
+                }
+            },
+        }).command({
+            command: 'test',
+            builder: {
+                'test-inspect': {
+                    describe: 'Whether to auto-open a DevTools panel for test page.',
+                    boolean: true,
+                    default: false
+                },
+                'test-extension': {
+                    describe: 'Test file extension(s) to load',
+                    array: true,
+                    default: ['js']
+                },
+                'test-file': {
+                    describe: 'Specify test file(s) to be loaded prior to root suite execution',
+                    array: true,
+                    default: []
+                },
+                'test-ignore': {
+                    describe: 'Ignore test file(s) or glob pattern(s)',
+                    array: true,
+                    default: []
+                },
+                'test-recursive': {
+                    describe: 'Look for tests in subdirectories',
+                    boolean: true,
+                    default: false
+                },
+                'test-sort': {
+                    describe: 'Sort test files',
+                    boolean: true,
+                    default: false
+                },
+                'test-spec': {
+                    describe: 'One or more test files, directories, or globs to test',
+                    array: true,
+                    default: ['test']
+                },
+                'test-coverage': {
+                    describe: 'Report test coverage consumable by istanbul',
+                    boolean: true,
+                    default: false
+                }
+            },
+            handler: async ({ testInspect, testExtension, testFile, testIgnore, testRecursive, testSort, testSpec, testCoverage }: {
+                testInspect: boolean,
+                testExtension: string[],
+                testFile: string[],
+                testIgnore: string[],
+                testRecursive: boolean,
+                testSort: boolean,
+                testSpec: string[],
+                testCoverage: boolean
+            }) => {
+                try {
+                    if (!process.env.THEIA_CONFIG_DIR) {
+                        process.env.THEIA_CONFIG_DIR = temp.track().mkdirSync('theia-test-config-dir');
+                    }
+                    await runTest({
+                        start: async () => new Promise((resolve, reject) => {
+                            const serverArgs = commandArgs('test').filter(a => a.indexOf('--test-') !== 0);
+                            const serverProcess = manager.start(serverArgs);
+                            serverProcess.on('message', resolve);
+                            serverProcess.on('error', reject);
+                            serverProcess.on('close', code => reject(`Server process exited unexpectedly with ${code} code`));
+                        }),
+                        launch: {
+                            args: ['--no-sandbox'],
+                            devtools: testInspect
+                        },
+                        files: {
+                            extension: testExtension,
+                            file: testFile,
+                            ignore: testIgnore,
+                            recursive: testRecursive,
+                            sort: testSort,
+                            spec: testSpec
+                        },
+                        coverage: testCoverage
+                    });
+                } catch (e) {
+                    console.error(e);
+                    process.exit(1);
+                }
+            }
+        });
 
     // see https://github.com/yargs/yargs/issues/287#issuecomment-314463783
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const commands = (yargs as any).getCommandInstance().getCommands();
     const argv = yargs.demandCommand(1).argv;
     const command = argv._[0];

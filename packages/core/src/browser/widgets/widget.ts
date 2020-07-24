@@ -14,12 +14,13 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { injectable, decorate, unmanaged } from 'inversify';
-import { Widget, FocusTracker } from '@phosphor/widgets';
+import { Widget } from '@phosphor/widgets';
 import { Message } from '@phosphor/messaging';
-import { Signal } from '@phosphor/signaling';
-import { Disposable, DisposableCollection, MaybePromise } from '../../common';
-import { KeyCode, KeysOrKeyCodes } from '../keys';
+import { Emitter, Event, Disposable, DisposableCollection, MaybePromise } from '../../common';
+import { KeyCode, KeysOrKeyCodes } from '../keyboard/keys';
 
 import PerfectScrollbar from 'perfect-scrollbar';
 
@@ -32,13 +33,29 @@ export * from '@phosphor/messaging';
 export const DISABLED_CLASS = 'theia-mod-disabled';
 export const EXPANSION_TOGGLE_CLASS = 'theia-ExpansionToggle';
 export const COLLAPSED_CLASS = 'theia-mod-collapsed';
+export const BUSY_CLASS = 'theia-mod-busy';
 export const SELECTED_CLASS = 'theia-mod-selected';
 export const FOCUS_CLASS = 'theia-mod-focus';
 
 @injectable()
 export class BaseWidget extends Widget {
 
-    protected readonly toDispose = new DisposableCollection();
+    protected readonly onScrollYReachEndEmitter = new Emitter<void>();
+    readonly onScrollYReachEnd: Event<void> = this.onScrollYReachEndEmitter.event;
+    protected readonly onScrollUpEmitter = new Emitter<void>();
+    readonly onScrollUp: Event<void> = this.onScrollUpEmitter.event;
+    protected readonly onDidChangeVisibilityEmitter = new Emitter<boolean>();
+    readonly onDidChangeVisibility = this.onDidChangeVisibilityEmitter.event;
+    protected readonly onDidDisposeEmitter = new Emitter<void>();
+    readonly onDidDispose = this.onDidDisposeEmitter.event;
+
+    protected readonly toDispose = new DisposableCollection(
+        this.onDidDisposeEmitter,
+        Disposable.create(() => this.onDidDisposeEmitter.fire()),
+        this.onScrollYReachEndEmitter,
+        this.onScrollUpEmitter,
+        this.onDidChangeVisibilityEmitter
+    );
     protected readonly toDisposeOnDetach = new DisposableCollection();
     protected scrollBar?: PerfectScrollbar;
     protected scrollOptions?: PerfectScrollbar.Options;
@@ -82,13 +99,15 @@ export class BaseWidget extends Widget {
                 const container = await this.getScrollContainer();
                 container.style.overflow = 'hidden';
                 this.scrollBar = new PerfectScrollbar(container, this.scrollOptions);
+                this.disableScrollBarFocus(container);
+                this.toDisposeOnDetach.push(addEventListener(container, <any>'ps-y-reach-end', () => { this.onScrollYReachEndEmitter.fire(undefined); }));
+                this.toDisposeOnDetach.push(addEventListener(container, <any>'ps-scroll-up', () => { this.onScrollUpEmitter.fire(undefined); }));
                 this.toDisposeOnDetach.push(Disposable.create(() => {
                     if (this.scrollBar) {
                         this.scrollBar.destroy();
                         this.scrollBar = undefined;
                     }
-                    // tslint:disable-next-line:no-null-keyword
-                    container.style.overflow = null;
+                    container.style.overflow = 'initial';
                 }));
             })();
         }
@@ -96,6 +115,17 @@ export class BaseWidget extends Widget {
 
     protected getScrollContainer(): MaybePromise<HTMLElement> {
         return this.node;
+    }
+
+    protected disableScrollBarFocus(scrollContainer: HTMLElement): void {
+        for (const thumbs of [scrollContainer.getElementsByClassName('ps__thumb-x'), scrollContainer.getElementsByClassName('ps__thumb-y')]) {
+            for (let i = 0; i < thumbs.length; i++) {
+                const element = thumbs.item(i);
+                if (element) {
+                    element.removeAttribute('tabIndex');
+                }
+            }
+        }
     }
 
     protected onUpdateRequest(msg: Message): void {
@@ -126,6 +156,20 @@ export class BaseWidget extends Widget {
     protected addClipboardListener<K extends 'cut' | 'copy' | 'paste'>(element: HTMLElement, type: K, listener: EventListenerOrEventListenerObject<K>): void {
         this.toDisposeOnDetach.push(addClipboardListener(element, type, listener));
     }
+
+    setFlag(flag: Widget.Flag): void {
+        super.setFlag(flag);
+        if (flag === Widget.Flag.IsVisible) {
+            this.onDidChangeVisibilityEmitter.fire(this.isVisible);
+        }
+    }
+
+    clearFlag(flag: Widget.Flag): void {
+        super.clearFlag(flag);
+        if (flag === Widget.Flag.IsVisible) {
+            this.onDidChangeVisibilityEmitter.fire(this.isVisible);
+        }
+    }
 }
 
 export function setEnabled(element: HTMLElement, enabled: boolean): void {
@@ -142,13 +186,13 @@ export function createIconButton(...classNames: string[]): HTMLSpanElement {
     return button;
 }
 
-// tslint:disable-next-line:no-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type EventListener<K extends keyof HTMLElementEventMap> = (this: HTMLElement, event: HTMLElementEventMap[K]) => any;
 export interface EventListenerObject<K extends keyof HTMLElementEventMap> {
     handleEvent(evt: HTMLElementEventMap[K]): void;
 }
 export namespace EventListenerObject {
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     export function is<K extends keyof HTMLElementEventMap>(listener: any | undefined): listener is EventListenerObject<K> {
         return !!listener && 'handleEvent' in listener;
     }
@@ -188,7 +232,7 @@ export function addKeyListener<K extends keyof HTMLElementEventMap>(
     }));
     for (const type of additionalEventTypes) {
         toDispose.push(addEventListener(element, type, e => {
-            // tslint:disable-next-line:no-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const event = (type as any)['keydown'];
             const result = action(event);
             if (typeof result !== 'boolean' || result) {
@@ -218,35 +262,41 @@ export function addClipboardListener<K extends 'cut' | 'copy' | 'paste'>(element
 }
 
 /**
- * Tracks the current and active widgets in the application. Also provides access to the currently active and current widgets.
+ * Resolves when the given widget is detached and hidden.
  */
-export const WidgetTracker = Symbol('WidgetTracker');
-export interface WidgetTracker {
+export function waitForClosed(widget: Widget): Promise<void> {
+    return waitForVisible(widget, false, false);
+}
 
-    /**
-     * The current widget in the application shell. The current widget is the last widget that
-     * was active and not yet closed. See the remarks to `activeWidget` on what _active_ means.
-     */
-    currentWidget: Widget | undefined;
+/**
+ * Resolves when the given widget is attached and visible.
+ */
+export function waitForRevealed(widget: Widget): Promise<void> {
+    return waitForVisible(widget, true, true);
+}
 
-    /**
-     * The active widget in the application shell. The active widget is the one that has focus
-     * (either the widget itself or any of its contents).
-     *
-     * _Note:_ Focus is taken by a widget through the `onActivateRequest` method. It is up to the
-     * widget implementation which DOM element will get the focus. The default implementation
-     * does not take any focus; in that case the widget is never returned by this property.
-     */
-    activeWidget: Widget | undefined;
+/**
+ * Resolves when the given widget is hidden regardless of attachment.
+ */
+export function waitForHidden(widget: Widget): Promise<void> {
+    return waitForVisible(widget, true);
+}
 
-    /**
-     * A signal emitted whenever the `currentWidget` property is changed.
-     */
-    readonly currentChanged: Signal<object, FocusTracker.IChangedArgs<Widget>>;
-
-    /**
-     * A signal emitted whenever the `activeWidget` property is changed.
-     */
-    readonly activeChanged: Signal<object, FocusTracker.IChangedArgs<Widget>>;
-
+function waitForVisible(widget: Widget, visible: boolean, attached?: boolean): Promise<void> {
+    if ((typeof attached !== 'boolean' || widget.isAttached === attached) &&
+        (widget.isVisible === visible || (widget.node.style.visibility !== 'hidden') === visible)
+    ) {
+        return new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+    }
+    return new Promise(resolve => {
+        const waitFor = () => window.requestAnimationFrame(() => {
+            if ((typeof attached !== 'boolean' || widget.isAttached === attached) &&
+                (widget.isVisible === visible || (widget.node.style.visibility !== 'hidden') === visible)) {
+                window.requestAnimationFrame(() => resolve());
+            } else {
+                waitFor();
+            }
+        });
+        waitFor();
+    });
 }

@@ -14,8 +14,8 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { injectable, inject, optional } from 'inversify';
-import { ArrayExt, find, toArray } from '@phosphor/algorithm';
+import { injectable, inject, optional, postConstruct } from 'inversify';
+import { ArrayExt, find, toArray, each } from '@phosphor/algorithm';
 import { Signal } from '@phosphor/signaling';
 import {
     BoxLayout, BoxPanel, DockLayout, DockPanel, FocusTracker, Layout, Panel, SplitLayout,
@@ -23,15 +23,19 @@ import {
 } from '@phosphor/widgets';
 import { Message } from '@phosphor/messaging';
 import { IDragEvent } from '@phosphor/dragdrop';
-import { RecursivePartial, MaybePromise } from '../../common';
-import { Saveable } from '../saveable';
+import { RecursivePartial, Event as CommonEvent, DisposableCollection, Disposable } from '../../common';
+import { animationFrame } from '../browser';
+import { Saveable, SaveableWidget } from '../saveable';
 import { StatusBarImpl, StatusBarEntry, StatusBarAlignment } from '../status-bar/status-bar';
-import { SidePanelHandler, SidePanel, SidePanelHandlerFactory, TheiaDockPanel } from './side-panel-handler';
+import { TheiaDockPanel, BOTTOM_AREA_ID, MAIN_AREA_ID } from './theia-dock-panel';
+import { SidePanelHandler, SidePanel, SidePanelHandlerFactory } from './side-panel-handler';
 import { TabBarRendererFactory, TabBarRenderer, SHELL_TABBAR_CONTEXT_MENU, ScrollableTabBar, ToolbarAwareTabBar } from './tab-bars';
 import { SplitPositionHandler, SplitPositionOptions } from './split-panels';
 import { FrontendApplicationStateService } from '../frontend-application-state';
 import { TabBarToolbarRegistry, TabBarToolbarFactory, TabBarToolbar } from './tab-bar-toolbar';
-import { WidgetTracker } from '../widgets';
+import { ContextKeyService } from '../context-key-service';
+import { Emitter } from '../../common/event';
+import { waitForRevealed, waitForClosed } from '../widgets';
 
 /** The class name added to ApplicationShell instances. */
 const APPLICATION_SHELL_CLASS = 'theia-ApplicationShell';
@@ -44,12 +48,23 @@ const MAIN_AREA_CLASS = 'theia-app-main';
 /** The class name added to the bottom area panel. */
 const BOTTOM_AREA_CLASS = 'theia-app-bottom';
 
-const LAYOUT_DATA_VERSION = '2.0';
+export type ApplicationShellLayoutVersion =
+    /** layout versioning is introduced, unversioned layout are not compatible */
+    2.0 |
+    /** view containers are introduced, backward compatible to 2.0 */
+    3.0 |
+    /** git history view is replaced by a more generic scm history view, backward compatible to 3.0 */
+    4.0;
+
+/**
+ * When a version is increased, make sure to introduce a migration (ApplicationShellLayoutMigration) to this version.
+ */
+export const applicationShellLayoutVersion: ApplicationShellLayoutVersion = 4.0;
 
 export const ApplicationShellOptions = Symbol('ApplicationShellOptions');
 export const DockPanelRendererFactory = Symbol('DockPanelRendererFactory');
 export interface DockPanelRendererFactory {
-    (widgetTracker: WidgetTracker): DockPanelRenderer
+    (): DockPanelRenderer
 }
 
 /**
@@ -63,13 +78,12 @@ export class DockPanelRenderer implements DockLayout.IRenderer {
     constructor(
         @inject(TabBarRendererFactory) protected readonly tabBarRendererFactory: () => TabBarRenderer,
         @inject(TabBarToolbarRegistry) protected readonly tabBarToolbarRegistry: TabBarToolbarRegistry,
-        @inject(WidgetTracker) protected readonly widgetTracker: WidgetTracker,
         @inject(TabBarToolbarFactory) protected readonly tabBarToolbarFactory: () => TabBarToolbar
     ) { }
 
     createTabBar(): TabBar<Widget> {
         const renderer = this.tabBarRendererFactory();
-        const tabBar = new ToolbarAwareTabBar(this.tabBarToolbarRegistry, this.widgetTracker, this.tabBarToolbarFactory, {
+        const tabBar = new ToolbarAwareTabBar(this.tabBarToolbarRegistry, this.tabBarToolbarFactory, {
             renderer,
             // Scroll bar options
             handlers: ['drag-thumb', 'keyboard', 'wheel', 'touch'],
@@ -79,6 +93,7 @@ export class DockPanelRenderer implements DockLayout.IRenderer {
         });
         this.tabBarClasses.forEach(c => tabBar.addClass(c));
         renderer.tabBar = tabBar;
+        tabBar.disposed.connect(() => renderer.dispose());
         renderer.contextMenuPath = SHELL_TABBAR_CONTEXT_MENU;
         tabBar.currentChanged.connect(this.onCurrentTabChanged, this);
         return tabBar;
@@ -112,18 +127,18 @@ interface WidgetDragState {
  * add, remove, or activate a widget.
  */
 @injectable()
-export class ApplicationShell extends Widget implements WidgetTracker {
+export class ApplicationShell extends Widget {
 
     /**
      * The dock panel in the main shell area. This is where editors usually go to.
      */
-    readonly mainPanel: DockPanel;
+    readonly mainPanel: TheiaDockPanel;
 
     /**
      * The dock panel in the bottom shell area. In contrast to the main panel, the bottom panel
      * can be collapsed and expanded.
      */
-    readonly bottomPanel: DockPanel;
+    readonly bottomPanel: TheiaDockPanel;
 
     /**
      * Handler for the left side panel. The primary application views go here, such as the
@@ -145,7 +160,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
     /**
      * The fixed-size panel shown on top. This one usually holds the main menu.
      */
-    protected topPanel: Panel;
+    readonly topPanel: Panel;
 
     /**
      * The current state of the bottom panel.
@@ -159,11 +174,32 @@ export class ApplicationShell extends Widget implements WidgetTracker {
     private readonly tracker = new FocusTracker<Widget>();
     private dragState?: WidgetDragState;
 
+    @inject(ContextKeyService)
+    protected readonly contextKeyService: ContextKeyService;
+
+    protected readonly onDidAddWidgetEmitter = new Emitter<Widget>();
+    readonly onDidAddWidget = this.onDidAddWidgetEmitter.event;
+    protected fireDidAddWidget(widget: Widget): void {
+        this.onDidAddWidgetEmitter.fire(widget);
+    }
+
+    protected readonly onDidRemoveWidgetEmitter = new Emitter<Widget>();
+    readonly onDidRemoveWidget = this.onDidRemoveWidgetEmitter.event;
+    protected fireDidRemoveWidget(widget: Widget): void {
+        this.onDidRemoveWidgetEmitter.fire(widget);
+    }
+
+    protected readonly onDidChangeActiveWidgetEmitter = new Emitter<FocusTracker.IChangedArgs<Widget>>();
+    readonly onDidChangeActiveWidget = this.onDidChangeActiveWidgetEmitter.event;
+
+    protected readonly onDidChangeCurrentWidgetEmitter = new Emitter<FocusTracker.IChangedArgs<Widget>>();
+    readonly onDidChangeCurrentWidget = this.onDidChangeCurrentWidgetEmitter.event;
+
     /**
      * Construct a new application shell.
      */
     constructor(
-        @inject(DockPanelRendererFactory) protected dockPanelRendererFactory: (widgetTracker: WidgetTracker) => DockPanelRenderer,
+        @inject(DockPanelRendererFactory) protected dockPanelRendererFactory: () => DockPanelRenderer,
         @inject(StatusBarImpl) protected readonly statusBar: StatusBarImpl,
         @inject(SidePanelHandlerFactory) sidePanelHandlerFactory: () => SidePanelHandler,
         @inject(SplitPositionHandler) protected splitPositionHandler: SplitPositionHandler,
@@ -193,14 +229,54 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         this.mainPanel = this.createMainPanel();
         this.topPanel = this.createTopPanel();
         this.bottomPanel = this.createBottomPanel();
+
         this.leftPanelHandler = sidePanelHandlerFactory();
         this.leftPanelHandler.create('left', this.options.leftPanel);
+        this.leftPanelHandler.dockPanel.widgetAdded.connect((_, widget) => this.fireDidAddWidget(widget));
+        this.leftPanelHandler.dockPanel.widgetRemoved.connect((_, widget) => this.fireDidRemoveWidget(widget));
+
         this.rightPanelHandler = sidePanelHandlerFactory();
         this.rightPanelHandler.create('right', this.options.rightPanel);
+        this.rightPanelHandler.dockPanel.widgetAdded.connect((_, widget) => this.fireDidAddWidget(widget));
+        this.rightPanelHandler.dockPanel.widgetRemoved.connect((_, widget) => this.fireDidRemoveWidget(widget));
+
         this.layout = this.createLayout();
 
         this.tracker.currentChanged.connect(this.onCurrentChanged, this);
         this.tracker.activeChanged.connect(this.onActiveChanged, this);
+    }
+
+    @postConstruct()
+    protected init(): void {
+        this.initSidebarVisibleKeyContext();
+        this.initFocusKeyContexts();
+    }
+
+    protected initSidebarVisibleKeyContext(): void {
+        const leftSideBarPanel = this.leftPanelHandler.dockPanel;
+        const sidebarVisibleKey = this.contextKeyService.createKey('sidebarVisible', leftSideBarPanel.isVisible);
+        const onAfterShow = leftSideBarPanel['onAfterShow'].bind(leftSideBarPanel);
+        leftSideBarPanel['onAfterShow'] = (msg: Message) => {
+            onAfterShow(msg);
+            sidebarVisibleKey.set(true);
+        };
+        const onAfterHide = leftSideBarPanel['onAfterHide'].bind(leftSideBarPanel);
+        leftSideBarPanel['onAfterHide'] = (msg: Message) => {
+            onAfterHide(msg);
+            sidebarVisibleKey.set(false);
+        };
+    }
+
+    protected initFocusKeyContexts(): void {
+        const sideBarFocus = this.contextKeyService.createKey('sideBarFocus', false);
+        const panelFocus = this.contextKeyService.createKey('panelFocus', false);
+        const updateFocusContextKeys = () => {
+            const area = this.activeWidget && this.getAreaFor(this.activeWidget);
+            sideBarFocus.set(area === 'left');
+            panelFocus.set(area === 'main');
+        };
+        updateFocusContextKeys();
+        this.activeChanged.connect(updateFocusContextKeys);
     }
 
     protected onBeforeAttach(msg: Message): void {
@@ -234,7 +310,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         }
     }
 
-    protected onDragEnter({ mimeData }: IDragEvent) {
+    protected onDragEnter({ mimeData }: IDragEvent): void {
         if (!this.dragState) {
             if (mimeData && mimeData.hasData('application/vnd.phosphor.widget-factory')) {
                 // The drag contains a widget, so we'll track it and expand side panels as needed
@@ -248,7 +324,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         }
     }
 
-    protected onDragOver(event: IDragEvent) {
+    protected onDragOver(event: IDragEvent): void {
         const state = this.dragState;
         if (state) {
             state.lastDragOver = event;
@@ -267,6 +343,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
                 && clientX >= offsetLeft + clientWidth - this.options.rightPanel.expandThreshold;
             const expBottom = allowExpansion && !expLeft && !expRight && clientY <= offsetTop + clientHeight
                 && clientY >= offsetTop + clientHeight - this.options.bottomPanel.expandThreshold;
+            // eslint-disable-next-line no-null/no-null
             if (expLeft && !state.leftExpanded && this.leftPanelHandler.tabBar.currentTitle === null) {
                 // The mouse cursor is moved close to the left border
                 this.leftPanelHandler.expand();
@@ -277,6 +354,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
                 this.leftPanelHandler.collapse();
                 state.leftExpanded = false;
             }
+            // eslint-disable-next-line no-null/no-null
             if (expRight && !state.rightExpanded && this.rightPanelHandler.tabBar.currentTitle === null) {
                 // The mouse cursor is moved close to the right border
                 this.rightPanelHandler.expand();
@@ -309,13 +387,13 @@ export class ApplicationShell extends Widget implements WidgetTracker {
             const { clientX, clientY } = this.dragState.lastDragOver;
             const event = document.createEvent('MouseEvent');
             event.initMouseEvent('mousemove', true, true, window, 0, 0, 0,
-                // tslint:disable-next-line:no-null-keyword
+                // eslint-disable-next-line no-null/no-null
                 clientX, clientY, false, false, false, false, 0, null);
             document.dispatchEvent(event);
         }
     }
 
-    protected onDrop(event: IDragEvent) {
+    protected onDrop(event: IDragEvent): void {
         const state = this.dragState;
         if (state) {
             if (state.leaveTimeout) {
@@ -337,7 +415,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         }
     }
 
-    protected onDragLeave(event: IDragEvent) {
+    protected onDragLeave(event: IDragEvent): void {
         const state = this.dragState;
         if (state) {
             state.lastDragOver = undefined;
@@ -362,8 +440,8 @@ export class ApplicationShell extends Widget implements WidgetTracker {
     /**
      * Create the dock panel in the main shell area.
      */
-    protected createMainPanel(): DockPanel {
-        const renderer = this.dockPanelRendererFactory(this);
+    protected createMainPanel(): TheiaDockPanel {
+        const renderer = this.dockPanelRendererFactory();
         renderer.tabBarClasses.push(MAIN_BOTTOM_AREA_CLASS);
         renderer.tabBarClasses.push(MAIN_AREA_CLASS);
         const dockPanel = new TheiaDockPanel({
@@ -371,15 +449,17 @@ export class ApplicationShell extends Widget implements WidgetTracker {
             renderer,
             spacing: 0
         });
-        dockPanel.id = 'theia-main-content-panel';
+        dockPanel.id = MAIN_AREA_ID;
+        dockPanel.widgetAdded.connect((_, widget) => this.fireDidAddWidget(widget));
+        dockPanel.widgetRemoved.connect((_, widget) => this.fireDidRemoveWidget(widget));
         return dockPanel;
     }
 
     /**
      * Create the dock panel in the bottom shell area.
      */
-    protected createBottomPanel(): DockPanel {
-        const renderer = this.dockPanelRendererFactory(this);
+    protected createBottomPanel(): TheiaDockPanel {
+        const renderer = this.dockPanelRendererFactory();
         renderer.tabBarClasses.push(MAIN_BOTTOM_AREA_CLASS);
         renderer.tabBarClasses.push(BOTTOM_AREA_CLASS);
         const dockPanel = new TheiaDockPanel({
@@ -387,7 +467,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
             renderer,
             spacing: 0
         });
-        dockPanel.id = 'theia-bottom-content-panel';
+        dockPanel.id = BOTTOM_AREA_ID;
         dockPanel.widgetAdded.connect((sender, widget) => {
             this.refreshBottomPanelToggleButton();
         });
@@ -402,6 +482,8 @@ export class ApplicationShell extends Widget implements WidgetTracker {
             this.mainPanel.overlay.hide(0);
         });
         dockPanel.hide();
+        dockPanel.widgetAdded.connect((_, widget) => this.fireDidAddWidget(widget));
+        dockPanel.widgetRemoved.connect((_, widget) => this.fireDidRemoveWidget(widget));
         return dockPanel;
     }
 
@@ -480,7 +562,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      */
     getLayoutData(): ApplicationShell.LayoutData {
         return {
-            version: LAYOUT_DATA_VERSION,
+            version: applicationShellLayoutVersion,
             mainPanel: this.mainPanel.saveLayout(),
             bottomPanel: {
                 config: this.bottomPanel.saveLayout(),
@@ -525,7 +607,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      * Apply a shell layout that has been previously created with `getLayoutData`.
      */
     async setLayoutData(layoutData: ApplicationShell.LayoutData): Promise<void> {
-        const { mainPanel, bottomPanel, leftPanel, rightPanel, activeWidgetId } = this.getValidatedLayoutData(layoutData);
+        const { mainPanel, bottomPanel, leftPanel, rightPanel, activeWidgetId } = layoutData;
         if (leftPanel) {
             this.leftPanelHandler.setLayoutData(leftPanel);
             this.registerWithFocusTracker(leftPanel);
@@ -562,13 +644,6 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         }
     }
 
-    protected getValidatedLayoutData(layoutData: ApplicationShell.LayoutData) {
-        if (layoutData.version !== LAYOUT_DATA_VERSION) {
-            throw new Error(`Saved workbench layout (version ${layoutData.version || 'unknown'}) is incompatible with the current (${LAYOUT_DATA_VERSION})`);
-        }
-        return layoutData;
-    }
-
     /**
      * Modify the height of the bottom panel. This implementation assumes that the container of the
      * bottom panel is a `SplitPanel`.
@@ -597,7 +672,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
             this.bottomPanelState.pendingUpdate,
             this.leftPanelHandler.state.pendingUpdate,
             this.rightPanelHandler.state.pendingUpdate
-            // tslint:disable-next-line:no-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ]) as Promise<any>;
     }
 
@@ -634,31 +709,56 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      *
      * Widgets added to the top area are not tracked regarding the _current_ and _active_ states.
      */
-    addWidget(widget: Widget, options: ApplicationShell.WidgetOptions) {
+    async addWidget(widget: Widget, options: Readonly<ApplicationShell.WidgetOptions> = {}): Promise<void> {
         if (!widget.id) {
             console.error('Widgets added to the application shell must have a unique id property.');
             return;
         }
-        switch (options.area) {
+        let ref: Widget | undefined = options.ref;
+        let area: ApplicationShell.Area = options.area || 'main';
+        if (!ref && (area === 'main' || area === 'bottom')) {
+            const tabBar = this.getTabBarFor(area);
+            ref = tabBar && tabBar.currentTitle && tabBar.currentTitle.owner || undefined;
+        }
+        // make sure that ref belongs to area
+        area = ref && this.getAreaFor(ref) || area;
+        const addOptions: DockPanel.IAddOptions = {};
+        if (ApplicationShell.isOpenToSideMode(options.mode)) {
+            const areaPanel = area === 'main' ? this.mainPanel : area === 'bottom' ? this.bottomPanel : undefined;
+            const sideRef = areaPanel && ref && (options.mode === 'open-to-left' ?
+                areaPanel.previousTabBarWidget(ref) :
+                areaPanel.nextTabBarWidget(ref));
+            if (sideRef) {
+                addOptions.ref = sideRef;
+            } else {
+                addOptions.ref = ref;
+                addOptions.mode = options.mode === 'open-to-left' ? 'split-left' : 'split-right';
+            }
+        } else {
+            addOptions.ref = ref;
+            addOptions.mode = options.mode;
+        }
+        const sidePanelOptions: SidePanel.WidgetOptions = { rank: options.rank };
+        switch (area) {
             case 'main':
-                this.mainPanel.addWidget(widget, options);
+                this.mainPanel.addWidget(widget, addOptions);
                 break;
             case 'top':
                 this.topPanel.addWidget(widget);
                 break;
             case 'bottom':
-                this.bottomPanel.addWidget(widget, options);
+                this.bottomPanel.addWidget(widget, addOptions);
                 break;
             case 'left':
-                this.leftPanelHandler.addWidget(widget, options);
+                this.leftPanelHandler.addWidget(widget, sidePanelOptions);
                 break;
             case 'right':
-                this.rightPanelHandler.addWidget(widget, options);
+                this.rightPanelHandler.addWidget(widget, sidePanelOptions);
                 break;
             default:
-                throw new Error('Illegal argument: ' + options.area);
+                throw new Error('Unexpected area: ' + options.area);
         }
-        if (options.area !== 'top') {
+        if (area !== 'top') {
             this.track(widget);
         }
     }
@@ -683,14 +783,83 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         }
     }
 
+    /**
+     * Find the widget that contains the given HTML element. The returned widget may be one
+     * that is managed by the application shell, or one that is embedded in another widget and
+     * not directly managed by the shell, or a tab bar.
+     */
+    findWidgetForElement(element: HTMLElement): Widget | undefined {
+        let widgetNode: HTMLElement | null = element;
+        while (widgetNode && !widgetNode.classList.contains('p-Widget')) {
+            widgetNode = widgetNode.parentElement;
+        }
+        if (widgetNode) {
+            return this.findWidgetForNode(widgetNode, this);
+        }
+        return undefined;
+    }
+
+    private findWidgetForNode(widgetNode: HTMLElement, widget: Widget): Widget | undefined {
+        if (widget.node === widgetNode) {
+            return widget;
+        }
+        let result: Widget | undefined;
+        each(widget.children(), child => {
+            result = this.findWidgetForNode(widgetNode, child);
+            return !result;
+        });
+        return result;
+    }
+
+    /**
+     * The current widget in the application shell. The current widget is the last widget that
+     * was active and not yet closed. See the remarks to `activeWidget` on what _active_ means.
+     */
     get currentWidget(): Widget | undefined {
         return this.tracker.currentWidget || undefined;
     }
 
+    /**
+     * The active widget in the application shell. The active widget is the one that has focus
+     * (either the widget itself or any of its contents).
+     *
+     * _Note:_ Focus is taken by a widget through the `onActivateRequest` method. It is up to the
+     * widget implementation which DOM element will get the focus. The default implementation
+     * does not take any focus; in that case the widget is never returned by this property.
+     */
     get activeWidget(): Widget | undefined {
         return this.tracker.activeWidget || undefined;
     }
 
+    /**
+     * Returns the last active widget in the given shell area.
+     */
+    getCurrentWidget(area: ApplicationShell.Area): Widget | undefined {
+        let title: Title<Widget> | null | undefined;
+        switch (area) {
+            case 'main':
+                title = this.mainPanel.currentTitle;
+                break;
+            case 'bottom':
+                title = this.bottomPanel.currentTitle;
+                break;
+            case 'left':
+                title = this.leftPanelHandler.tabBar.currentTitle;
+                break;
+            case 'right':
+                title = this.rightPanelHandler.tabBar.currentTitle;
+                break;
+            default:
+                throw new Error('Illegal argument: ' + area);
+        }
+        return title ? title.owner : undefined;
+    }
+
+    /**
+     * A signal emitted whenever the `currentWidget` property is changed.
+     *
+     * @deprecated since 0.11.0, use `onDidChangeActiveWidget` instead
+     */
     readonly currentChanged = new Signal<this, FocusTracker.IChangedArgs<Widget>>(this);
 
     /**
@@ -698,14 +867,23 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      */
     private onCurrentChanged(sender: FocusTracker<Widget>, args: FocusTracker.IChangedArgs<Widget>): void {
         this.currentChanged.emit(args);
+        this.onDidChangeCurrentWidgetEmitter.fire(args);
     }
 
+    /**
+     * A signal emitted whenever the `activeWidget` property is changed.
+     *
+     * @deprecated since 0.11.0, use `onDidChangeActiveWidget` instead
+     */
     readonly activeChanged = new Signal<this, FocusTracker.IChangedArgs<Widget>>(this);
+
+    protected readonly toDisposeOnActiveChanged = new DisposableCollection();
 
     /**
      * Handle a change to the active widget.
      */
     private onActiveChanged(sender: FocusTracker<Widget>, args: FocusTracker.IChangedArgs<Widget>): void {
+        this.toDisposeOnActiveChanged.dispose();
         const { newValue, oldValue } = args;
         if (oldValue) {
             let w: Widget | null = oldValue;
@@ -715,7 +893,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
                 w = w.parent;
             }
             // Reset the z-index to the default
-            // tslint:disable-next-line:no-null-keyword
+            // eslint-disable-next-line no-null/no-null
             this.setZIndex(oldValue.node, null);
         }
         if (newValue) {
@@ -733,17 +911,44 @@ export class ApplicationShell extends Widget implements WidgetTracker {
                     tabBar.revealTab(index);
                 }
             }
+            const panel = this.getAreaPanelFor(newValue);
+            if (panel instanceof TheiaDockPanel) {
+                panel.markAsCurrent(newValue.title);
+            }
             // Set the z-index so elements with `position: fixed` contained in the active widget are displayed correctly
             this.setZIndex(newValue.node, '1');
+
+            // activate another widget if an active widget will be closed
+            const onCloseRequest = newValue['onCloseRequest'];
+            newValue['onCloseRequest'] = msg => {
+                const currentTabBar = this.currentTabBar;
+                if (currentTabBar) {
+                    const recentlyUsedInTabBar = currentTabBar['_previousTitle'] as TabBar<Widget>['currentTitle'];
+                    if (recentlyUsedInTabBar && recentlyUsedInTabBar.owner !== newValue) {
+                        currentTabBar.currentIndex = ArrayExt.firstIndexOf(currentTabBar.titles, recentlyUsedInTabBar);
+                        if (currentTabBar.currentTitle) {
+                            this.activateWidget(currentTabBar.currentTitle.owner.id);
+                        }
+                    } else if (!this.activateNextTabInTabBar(currentTabBar)) {
+                        if (!this.activatePreviousTabBar(currentTabBar)) {
+                            this.activateNextTabBar(currentTabBar);
+                        }
+                    }
+                }
+                newValue['onCloseRequest'] = onCloseRequest;
+                newValue['onCloseRequest'](msg);
+            };
+            this.toDisposeOnActiveChanged.push(Disposable.create(() => newValue['onCloseRequest'] = onCloseRequest));
         }
         this.activeChanged.emit(args);
+        this.onDidChangeActiveWidgetEmitter.fire(args);
     }
 
     /**
      * Set the z-index of the given element and its ancestors to the value `z`.
      */
-    private setZIndex(element: HTMLElement, z: string | null) {
-        element.style.zIndex = z;
+    private setZIndex(element: HTMLElement, z: string | null): void {
+        element.style.zIndex = z || '';
         const parent = element.parentElement;
         if (parent && parent !== this.node) {
             this.setZIndex(parent, z);
@@ -753,15 +958,34 @@ export class ApplicationShell extends Widget implements WidgetTracker {
     /**
      * Track the given widget so it is considered in the `current` and `active` state of the shell.
      */
-    protected async track(widget: Widget): Promise<void> {
+    protected track(widget: Widget): void {
+        if (this.tracker.widgets.indexOf(widget) !== -1) {
+            return;
+        }
         this.tracker.add(widget);
+        this.checkActivation(widget);
         Saveable.apply(widget);
         if (ApplicationShell.TrackableWidgetProvider.is(widget)) {
-            for (const toTrack of await widget.getTrackableWidgets()) {
-                this.tracker.add(toTrack);
-                Saveable.apply(toTrack);
+            for (const toTrack of widget.getTrackableWidgets()) {
+                this.track(toTrack);
+            }
+            if (widget.onDidChangeTrackableWidgets) {
+                widget.onDidChangeTrackableWidgets(widgets => widgets.forEach(w => this.track(w)));
             }
         }
+    }
+
+    protected toTrackedStack(id: string): Widget[] {
+        const tracked = new Map<string, Widget>(this.tracker.widgets.map(w => [w.id, w] as [string, Widget]));
+        let current = tracked.get(id);
+        const stack: Widget[] = [];
+        while (current) {
+            if (tracked.has(current.id)) {
+                stack.push(current);
+            }
+            current = current.parent || undefined;
+        }
+        return stack;
     }
 
     /**
@@ -774,25 +998,68 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      *
      * @returns the activated widget if it was found
      */
-    activateWidget(id: string): Widget | undefined {
+    async activateWidget(id: string): Promise<Widget | undefined> {
+        const stack = this.toTrackedStack(id);
+        let current = stack.pop();
+        if (current && !this.doActivateWidget(current.id)) {
+            return undefined;
+        }
+        while (current && stack.length) {
+            const child = stack.pop()!;
+            if (ApplicationShell.TrackableWidgetProvider.is(current) && current.activateWidget) {
+                current = current.activateWidget(child.id);
+            } else {
+                child.activate();
+                current = child;
+            }
+        }
+        if (!current) {
+            return undefined;
+        }
+        await Promise.all([
+            this.waitForActivation(current.id),
+            waitForRevealed(current),
+            this.pendingUpdates
+        ]);
+        return current;
+    }
+
+    waitForActivation(id: string): Promise<void> {
+        if (this.activeWidget && this.activeWidget.id === id) {
+            return Promise.resolve();
+        }
+        return new Promise(resolve => {
+            const toDispose = this.onDidChangeActiveWidget(() => {
+                if (this.activeWidget && this.activeWidget.id === id) {
+                    toDispose.dispose();
+                    resolve();
+                }
+            });
+        });
+    }
+
+    /**
+     * Activate top-level area widget.
+     */
+    protected doActivateWidget(id: string): Widget | undefined {
         let widget = find(this.mainPanel.widgets(), w => w.id === id);
         if (widget) {
             this.mainPanel.activateWidget(widget);
-            return this.checkActivation(widget);
+            return widget;
         }
         widget = find(this.bottomPanel.widgets(), w => w.id === id);
         if (widget) {
             this.expandBottomPanel();
             this.bottomPanel.activateWidget(widget);
-            return this.checkActivation(widget);
+            return widget;
         }
         widget = this.leftPanelHandler.activate(id);
         if (widget) {
-            return this.checkActivation(widget);
+            return widget;
         }
         widget = this.rightPanelHandler.activate(id);
         if (widget) {
-            return this.checkActivation(widget);
+            return widget;
         }
     }
 
@@ -804,12 +1071,40 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      * `activeWidget` property.
      */
     private checkActivation(widget: Widget): Widget {
-        window.requestAnimationFrame(() => {
-            if (this.activeWidget !== widget) {
-                console.warn('Widget was activated, but did not accept focus: ' + widget.id);
-            }
-        });
+        const onActivateRequest = widget['onActivateRequest'].bind(widget);
+        widget['onActivateRequest'] = (msg: Message) => {
+            onActivateRequest(msg);
+            this.assertActivated(widget);
+        };
         return widget;
+    }
+
+    private readonly activationTimeout = 2000;
+    private readonly toDisposeOnActivationCheck = new DisposableCollection();
+    private assertActivated(widget: Widget): void {
+        this.toDisposeOnActivationCheck.dispose();
+
+        const onDispose = () => this.toDisposeOnActivationCheck.dispose();
+        widget.disposed.connect(onDispose);
+        this.toDisposeOnActivationCheck.push(Disposable.create(() => widget.disposed.disconnect(onDispose)));
+
+        let start = 0;
+        const step: FrameRequestCallback = timestamp => {
+            if (document.activeElement && widget.node.contains(document.activeElement)) {
+                return;
+            }
+            if (!start) {
+                start = timestamp;
+            }
+            const delta = timestamp - start;
+            if (delta < this.activationTimeout) {
+                request = window.requestAnimationFrame(step);
+            } else {
+                console.warn(`Widget was activated, but did not accept focus after ${this.activationTimeout}ms: ${widget.id}`);
+            }
+        };
+        let request = window.requestAnimationFrame(step);
+        this.toDisposeOnActivationCheck.push(Disposable.create(() => window.cancelAnimationFrame(request)));
     }
 
     /**
@@ -818,7 +1113,34 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      *
      * @returns the revealed widget if it was found
      */
-    revealWidget(id: string): Widget | undefined {
+    async revealWidget(id: string): Promise<Widget | undefined> {
+        const stack = this.toTrackedStack(id);
+        let current = stack.pop();
+        if (current && !this.doRevealWidget(current.id)) {
+            return undefined;
+        }
+        while (current && stack.length) {
+            const child = stack.pop()!;
+            if (ApplicationShell.TrackableWidgetProvider.is(current) && current.revealWidget) {
+                current = current.revealWidget(child.id);
+            } else {
+                current = child;
+            }
+        }
+        if (!current) {
+            return undefined;
+        }
+        await Promise.all([
+            waitForRevealed(current),
+            this.pendingUpdates
+        ]);
+        return current;
+    }
+
+    /**
+     * Reveal top-level area widget.
+     */
+    protected doRevealWidget(id: string): Widget | undefined {
         let widget = find(this.mainPanel.widgets(), w => w.id === id);
         if (!widget) {
             widget = find(this.bottomPanel.widgets(), w => w.id === id);
@@ -837,10 +1159,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         if (widget) {
             return widget;
         }
-        widget = this.rightPanelHandler.expand(id);
-        if (widget) {
-            return widget;
-        }
+        return this.rightPanelHandler.expand(id);
     }
 
     /**
@@ -934,17 +1253,14 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      * Collapse the named side panel area. This makes sure that the panel is hidden,
      * increasing the space that is available for other shell areas.
      */
-    collapsePanel(area: ApplicationShell.Area): void {
+    collapsePanel(area: ApplicationShell.Area): Promise<void> {
         switch (area) {
             case 'bottom':
-                this.collapseBottomPanel();
-                break;
+                return this.collapseBottomPanel();
             case 'left':
-                this.leftPanelHandler.collapse();
-                break;
+                return this.leftPanelHandler.collapse();
             case 'right':
-                this.rightPanelHandler.collapse();
-                break;
+                return this.rightPanelHandler.collapse();
             default:
                 throw new Error('Area cannot be collapsed: ' + area);
         }
@@ -954,25 +1270,27 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      * Collapse the bottom panel. All contained widgets are hidden, but not closed.
      * They can be restored by calling `expandBottomPanel`.
      */
-    protected collapseBottomPanel(): void {
+    protected collapseBottomPanel(): Promise<void> {
         const bottomPanel = this.bottomPanel;
-        if (!bottomPanel.isHidden) {
-            if (this.bottomPanelState.expansion === SidePanel.ExpansionState.expanded) {
-                const size = this.getBottomPanelSize();
-                if (size) {
-                    this.bottomPanelState.lastPanelSize = size;
-                }
-            }
-            this.bottomPanelState.expansion = SidePanel.ExpansionState.collapsed;
-            bottomPanel.hide();
+        if (bottomPanel.isHidden) {
+            return Promise.resolve();
         }
+        if (this.bottomPanelState.expansion === SidePanel.ExpansionState.expanded) {
+            const size = this.getBottomPanelSize();
+            if (size) {
+                this.bottomPanelState.lastPanelSize = size;
+            }
+        }
+        this.bottomPanelState.expansion = SidePanel.ExpansionState.collapsed;
+        bottomPanel.hide();
+        return animationFrame();
     }
 
     /**
      * Refresh the toggle button for the bottom panel. This implementation creates a status bar entry
      * and refers to the command `core.toggle.bottom.panel`.
      */
-    protected refreshBottomPanelToggleButton() {
+    protected refreshBottomPanelToggleButton(): void {
         if (this.bottomPanel.isEmpty) {
             this.statusBar.removeElement(BOTTOM_PANEL_TOGGLE_ID);
         } else {
@@ -981,7 +1299,7 @@ export class ApplicationShell extends Widget implements WidgetTracker {
                 alignment: StatusBarAlignment.RIGHT,
                 tooltip: 'Toggle Bottom Panel',
                 command: 'core.toggle.bottom.panel',
-                priority: 0
+                priority: -1000
             };
             this.statusBar.setElement(BOTTOM_PANEL_TOGGLE_ID, element);
         }
@@ -1032,6 +1350,31 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         }
     }
 
+    async closeWidget(id: string, options?: ApplicationShell.CloseOptions): Promise<Widget | undefined> {
+        // TODO handle save for composite widgets, i.e. the preference widget has 2 editors
+        const stack = this.toTrackedStack(id);
+        const current = stack.pop();
+        if (!current) {
+            return undefined;
+        }
+        let pendingClose;
+        if (SaveableWidget.is(current)) {
+            let shouldSave;
+            if (options && 'save' in options) {
+                shouldSave = () => options.save;
+            }
+            pendingClose = current.closeWithSaving({ shouldSave });
+        } else {
+            current.close();
+            pendingClose = waitForClosed(current);
+        };
+        await Promise.all([
+            pendingClose,
+            this.pendingUpdates
+        ]);
+        return stack[0] || current;
+    }
+
     /**
      * The shell area name of the currently active tab, or undefined.
      */
@@ -1046,13 +1389,31 @@ export class ApplicationShell extends Widget implements WidgetTracker {
      * Determine the name of the shell area where the given widget resides. The result is
      * undefined if the widget does not reside directly in the shell.
      */
-    getAreaFor(widget: Widget): ApplicationShell.Area | undefined {
+    getAreaFor(input: TabBar<Widget> | Widget): ApplicationShell.Area | undefined {
+        if (input instanceof TabBar) {
+            if (find(this.mainPanel.tabBars(), tb => tb === input)) {
+                return 'main';
+            }
+            if (find(this.bottomPanel.tabBars(), tb => tb === input)) {
+                return 'bottom';
+            }
+            if (this.leftPanelHandler.tabBar === input) {
+                return 'left';
+            }
+            if (this.rightPanelHandler.tabBar === input) {
+                return 'right';
+            }
+        }
+        const widget = this.toTrackedStack(input.id).pop();
+        if (!widget) {
+            return undefined;
+        }
         const title = widget.title;
-        const mainPanelTabBar = find(this.mainPanel.tabBars(), bar => ArrayExt.firstIndexOf(bar.titles, title) > -1);
+        const mainPanelTabBar = this.mainPanel.findTabBar(title);
         if (mainPanelTabBar) {
             return 'main';
         }
-        const bottomPanelTabBar = find(this.bottomPanel.tabBars(), bar => ArrayExt.firstIndexOf(bar.titles, title) > -1);
+        const bottomPanelTabBar = this.bottomPanel.findTabBar(title);
         if (bottomPanelTabBar) {
             return 'bottom';
         }
@@ -1062,6 +1423,30 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         if (ArrayExt.firstIndexOf(this.rightPanelHandler.tabBar.titles, title) > -1) {
             return 'right';
         }
+        return undefined;
+    }
+
+    protected getAreaPanelFor(input: Widget): DockPanel | undefined {
+        const widget = this.toTrackedStack(input.id).pop();
+        if (!widget) {
+            return undefined;
+        }
+        const title = widget.title;
+        const mainPanelTabBar = this.mainPanel.findTabBar(title);
+        if (mainPanelTabBar) {
+            return this.mainPanel;
+        }
+        const bottomPanelTabBar = this.bottomPanel.findTabBar(title);
+        if (bottomPanelTabBar) {
+            return this.bottomPanel;
+        }
+        if (ArrayExt.firstIndexOf(this.leftPanelHandler.tabBar.titles, title) > -1) {
+            return this.leftPanelHandler.dockPanel;
+        }
+        if (ArrayExt.firstIndexOf(this.rightPanelHandler.tabBar.titles, title) > -1) {
+            return this.rightPanelHandler.dockPanel;
+        }
+        return undefined;
     }
 
     /**
@@ -1081,9 +1466,9 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         if (typeof widgetOrArea === 'string') {
             switch (widgetOrArea) {
                 case 'main':
-                    return this.mainPanel.tabBars().next();
+                    return this.mainPanel.currentTabBar;
                 case 'bottom':
-                    return this.bottomPanel.tabBars().next();
+                    return this.bottomPanel.currentTabBar;
                 case 'left':
                     return this.leftPanelHandler.tabBar;
                 case 'right':
@@ -1091,25 +1476,29 @@ export class ApplicationShell extends Widget implements WidgetTracker {
                 default:
                     throw new Error('Illegal argument: ' + widgetOrArea);
             }
-        } else if (widgetOrArea && widgetOrArea.isAttached) {
-            const widgetTitle = widgetOrArea.title;
-            const mainPanelTabBar = find(this.mainPanel.tabBars(), bar => ArrayExt.firstIndexOf(bar.titles, widgetTitle) > -1);
-            if (mainPanelTabBar) {
-                return mainPanelTabBar;
-            }
-            const bottomPanelTabBar = find(this.bottomPanel.tabBars(), bar => ArrayExt.firstIndexOf(bar.titles, widgetTitle) > -1);
-            if (bottomPanelTabBar) {
-                return bottomPanelTabBar;
-            }
-            const leftPanelTabBar = this.leftPanelHandler.tabBar;
-            if (ArrayExt.firstIndexOf(leftPanelTabBar.titles, widgetTitle) > -1) {
-                return leftPanelTabBar;
-            }
-            const rightPanelTabBar = this.rightPanelHandler.tabBar;
-            if (ArrayExt.firstIndexOf(rightPanelTabBar.titles, widgetTitle) > -1) {
-                return rightPanelTabBar;
-            }
         }
+        const widget = this.toTrackedStack(widgetOrArea.id).pop();
+        if (!widget) {
+            return undefined;
+        }
+        const widgetTitle = widget.title;
+        const mainPanelTabBar = this.mainPanel.findTabBar(widgetTitle);
+        if (mainPanelTabBar) {
+            return mainPanelTabBar;
+        }
+        const bottomPanelTabBar = this.bottomPanel.findTabBar(widgetTitle);
+        if (bottomPanelTabBar) {
+            return bottomPanelTabBar;
+        }
+        const leftPanelTabBar = this.leftPanelHandler.tabBar;
+        if (ArrayExt.firstIndexOf(leftPanelTabBar.titles, widgetTitle) > -1) {
+            return leftPanelTabBar;
+        }
+        const rightPanelTabBar = this.rightPanelHandler.tabBar;
+        if (ArrayExt.firstIndexOf(rightPanelTabBar.titles, widgetTitle) > -1) {
+            return rightPanelTabBar;
+        }
+        return undefined;
     }
 
     /**
@@ -1138,7 +1527,33 @@ export class ApplicationShell extends Widget implements WidgetTracker {
     /*
      * Activate the next tab in the current tab bar.
      */
-    activateNextTab(): void {
+    activateNextTabInTabBar(current: TabBar<Widget> | undefined = this.currentTabBar): boolean {
+        const index = this.nextTabIndexInTabBar(current);
+        if (!current || index === -1) {
+            return false;
+        }
+        current.currentIndex = index;
+        if (current.currentTitle) {
+            this.activateWidget(current.currentTitle.owner.id);
+        }
+        return true;
+    }
+
+    nextTabIndexInTabBar(current: TabBar<Widget> | undefined = this.currentTabBar): number {
+        if (!current || current.titles.length <= 1) {
+            return -1;
+        }
+        const index = current.currentIndex;
+        if (index === -1) {
+            return -1;
+        }
+        if (index < current.titles.length - 1) {
+            return index + 1;
+        }
+        return 0;
+    }
+
+    activateNextTab(): boolean {
         const current = this.currentTabBar;
         if (current) {
             const ci = current.currentIndex;
@@ -1146,23 +1561,33 @@ export class ApplicationShell extends Widget implements WidgetTracker {
                 if (ci < current.titles.length - 1) {
                     current.currentIndex += 1;
                     if (current.currentTitle) {
-                        current.currentTitle.owner.activate();
+                        this.activateWidget(current.currentTitle.owner.id);
                     }
+                    return true;
                 } else if (ci === current.titles.length - 1) {
-                    const nextBar = this.nextTabBar(current);
-                    nextBar.currentIndex = 0;
-                    if (nextBar.currentTitle) {
-                        nextBar.currentTitle.owner.activate();
-                    }
+                    return this.activateNextTabBar(current);
                 }
             }
         }
+        return false;
+    }
+
+    activateNextTabBar(current: TabBar<Widget> | undefined = this.currentTabBar): boolean {
+        const nextBar = this.nextTabBar(current);
+        if (nextBar) {
+            nextBar.currentIndex = 0;
+            if (nextBar.currentTitle) {
+                this.activateWidget(nextBar.currentTitle.owner.id);
+            }
+            return true;
+        }
+        return false;
     }
 
     /**
      * Return the tab bar next to the given tab bar; return the given tab bar if there is no adjacent one.
      */
-    private nextTabBar(current: TabBar<Widget>): TabBar<Widget> {
+    nextTabBar(current: TabBar<Widget> | undefined = this.currentTabBar): TabBar<Widget> | undefined {
         let bars = toArray(this.bottomPanel.tabBars());
         let len = bars.length;
         let ci = ArrayExt.firstIndexOf(bars, current);
@@ -1183,7 +1608,33 @@ export class ApplicationShell extends Widget implements WidgetTracker {
     /*
      * Activate the previous tab in the current tab bar.
      */
-    activatePreviousTab(): void {
+    activatePreviousTabInTabBar(current: TabBar<Widget> | undefined = this.currentTabBar): boolean {
+        const index = this.previousTabIndexInTabBar(current);
+        if (!current || index === -1) {
+            return false;
+        }
+        current.currentIndex = index;
+        if (current.currentTitle) {
+            this.activateWidget(current.currentTitle.owner.id);
+        }
+        return true;
+    }
+
+    previousTabIndexInTabBar(current: TabBar<Widget> | undefined = this.currentTabBar): number {
+        if (!current || current.titles.length <= 1) {
+            return -1;
+        }
+        const index = current.currentIndex;
+        if (index === -1) {
+            return -1;
+        }
+        if (index > 0) {
+            return index - 1;
+        }
+        return current.titles.length - 1;
+    }
+
+    activatePreviousTab(): boolean {
         const current = this.currentTabBar;
         if (current) {
             const ci = current.currentIndex;
@@ -1191,24 +1642,34 @@ export class ApplicationShell extends Widget implements WidgetTracker {
                 if (ci > 0) {
                     current.currentIndex -= 1;
                     if (current.currentTitle) {
-                        current.currentTitle.owner.activate();
+                        this.activateWidget(current.currentTitle.owner.id);
                     }
+                    return true;
                 } else if (ci === 0) {
-                    const prevBar = this.previousTabBar(current);
-                    const len = prevBar.titles.length;
-                    prevBar.currentIndex = len - 1;
-                    if (prevBar.currentTitle) {
-                        prevBar.currentTitle.owner.activate();
-                    }
+                    return this.activatePreviousTabBar(current);
                 }
             }
         }
+        return false;
+    }
+
+    activatePreviousTabBar(current: TabBar<Widget> | undefined = this.currentTabBar): boolean {
+        const prevBar = this.previousTabBar(current);
+        if (!prevBar) {
+            return false;
+        }
+        const len = prevBar.titles.length;
+        prevBar.currentIndex = len - 1;
+        if (prevBar.currentTitle) {
+            this.activateWidget(prevBar.currentTitle.owner.id);
+        }
+        return true;
     }
 
     /**
      * Return the tab bar previous to the given tab bar; return the given tab bar if there is no adjacent one.
      */
-    private previousTabBar(current: TabBar<Widget>): TabBar<Widget> {
+    previousTabBar(current: TabBar<Widget> | undefined = this.currentTabBar): TabBar<Widget> | undefined {
         const bars = toArray(this.mainPanel.tabBars());
         const len = bars.length;
         const ci = ArrayExt.firstIndexOf(bars, current);
@@ -1256,6 +1717,27 @@ export class ApplicationShell extends Widget implements WidgetTracker {
         return [...this.tracker.widgets];
     }
 
+    getWidgetById(id: string): Widget | undefined {
+        for (const widget of this.tracker.widgets) {
+            if (widget.id === id) {
+                return widget;
+            }
+        }
+        return undefined;
+    }
+
+    canToggleMaximized(): boolean {
+        const area = this.currentWidget && this.getAreaFor(this.currentWidget);
+        return area === 'main' || area === 'bottom';
+    }
+
+    toggleMaximized(): void {
+        const area = this.currentWidget && this.getAreaPanelFor(this.currentWidget);
+        if (area instanceof TheiaDockPanel && (area === this.mainPanel || area === this.bottomPanel)) {
+            area.toggleMaximized();
+        }
+    }
+
 }
 
 /**
@@ -1295,38 +1777,69 @@ export namespace ApplicationShell {
         bottomPanel: Object.freeze(<BottomPanelOptions>{
             emptySize: 140,
             expandThreshold: 160,
-            expandDuration: 150,
+            expandDuration: 0,
             initialSizeRatio: 0.382
         }),
         leftPanel: Object.freeze(<SidePanel.Options>{
             emptySize: 140,
             expandThreshold: 140,
-            expandDuration: 150,
+            expandDuration: 0,
             initialSizeRatio: 0.191
         }),
         rightPanel: Object.freeze(<SidePanel.Options>{
             emptySize: 140,
             expandThreshold: 140,
-            expandDuration: 150,
+            expandDuration: 0,
             initialSizeRatio: 0.191
         })
     });
 
     /**
+     * Whether a widget should be opened to the side tab bar relatively to the reference widget.
+     */
+    export type OpenToSideMode = 'open-to-left' | 'open-to-right';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    export function isOpenToSideMode(mode: OpenToSideMode | any): mode is OpenToSideMode {
+        return mode === 'open-to-left' || mode === 'open-to-right';
+    }
+
+    /**
      * Options for adding a widget to the application shell.
      */
-    export interface WidgetOptions extends DockLayout.IAddOptions, SidePanel.WidgetOptions {
+    export interface WidgetOptions extends SidePanel.WidgetOptions {
         /**
          * The area of the application shell where the widget will reside.
          */
-        area: Area;
+        area?: Area;
+        /**
+         * The insertion mode for adding the widget.
+         *
+         * The default is `'tab-after'`.
+         */
+        mode?: DockLayout.InsertMode | OpenToSideMode
+        /**
+         * The reference widget for the insert location.
+         *
+         * The default is `undefined`.
+         */
+        ref?: Widget;
+    }
+
+    export interface CloseOptions {
+        /**
+         * if optional then a user will be prompted
+         * if undefined then close will be canceled
+         * if true then will be saved on close
+         * if false then won't be saved on close
+         */
+        save?: boolean | undefined
     }
 
     /**
      * Data to save and load the application shell layout.
      */
     export interface LayoutData {
-        version?: string,
+        version?: string | ApplicationShellLayoutVersion,
         mainPanel?: DockPanel.ILayoutConfig;
         bottomPanel?: BottomPanelLayoutData;
         leftPanel?: SidePanel.LayoutData;
@@ -1347,7 +1860,18 @@ export namespace ApplicationShell {
      * Exposes widgets which activation state should be tracked by shell.
      */
     export interface TrackableWidgetProvider {
-        getTrackableWidgets(): MaybePromise<Widget[]>
+        getTrackableWidgets(): Widget[]
+        readonly onDidChangeTrackableWidgets?: CommonEvent<Widget[]>
+        /**
+         * Make visible and focus a trackable widget for the given id.
+         * If not implemented then `activate` request will be sent to a child widget directly.
+         */
+        activateWidget?(id: string): Widget | undefined;
+        /**
+         * Make visible a trackable widget for the given id.
+         * If not implemented then a widget should be always visible when an owner is visible.
+         */
+        revealWidget?(id: string): Widget | undefined;
     }
 
     export namespace TrackableWidgetProvider {
@@ -1355,4 +1879,5 @@ export namespace ApplicationShell {
             return !!widget && 'getTrackableWidgets' in widget;
         }
     }
+
 }

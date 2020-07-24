@@ -14,21 +14,35 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-/* tslint:disable:no-any */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { Emitter, Event } from '@theia/core/lib/common/event';
 import * as theia from '@theia/plugin';
 import {
     PLUGIN_RPC_CONTEXT,
     PreferenceRegistryExt,
-    PreferenceRegistryMain
-} from '../api/plugin-api';
-import { RPCProtocol } from '../api/rpc-protocol';
-import { isObject } from '../common/types';
-import { PreferenceChange } from '@theia/core/lib/browser';
-import { ConfigurationTarget } from './types-impl';
-
+    PreferenceRegistryMain,
+    PreferenceData,
+    PreferenceChangeExt
+} from '../common/plugin-api-rpc';
+import { RPCProtocol } from '../common/rpc-protocol';
+import { isObject, mixin } from '../common/types';
+import { Configuration, ConfigurationModel } from './preferences/configuration';
+import { WorkspaceExtImpl } from './workspace';
 import cloneDeep = require('lodash.clonedeep');
+
+enum ConfigurationTarget {
+    Global = 1,
+    Workspace = 2,
+    WorkspaceFolder = 3
+}
+
+enum PreferenceScope {
+    Default,
+    User,
+    Workspace,
+    Folder,
+}
 
 interface ConfigurationInspect<T> {
     key: string;
@@ -38,7 +52,7 @@ interface ConfigurationInspect<T> {
     workspaceFolderValue?: T;
 }
 
-// tslint:disable-next-line:no-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function lookUp(tree: any, key: string): any {
     if (!key) {
         return;
@@ -54,31 +68,32 @@ function lookUp(tree: any, key: string): any {
 
 export class PreferenceRegistryExtImpl implements PreferenceRegistryExt {
     private proxy: PreferenceRegistryMain;
-    // tslint:disable-next-line:no-any
-    private _preferences: any;
+    private _preferences: Configuration;
     private readonly _onDidChangeConfiguration = new Emitter<theia.ConfigurationChangeEvent>();
 
     readonly onDidChangeConfiguration: Event<theia.ConfigurationChangeEvent> = this._onDidChangeConfiguration.event;
 
-    constructor(rpc: RPCProtocol) {
+    constructor(
+        rpc: RPCProtocol,
+        private readonly workspace: WorkspaceExtImpl
+    ) {
         this.proxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.PREFERENCE_REGISTRY_MAIN);
     }
 
-    // tslint:disable-next-line:no-any
-    init(data: { [key: string]: any }): void {
+    init(data: PreferenceData): void {
         this._preferences = this.parse(data);
     }
 
-    // tslint:disable-next-line:no-any
-    $acceptConfigurationChanged(data: { [key: string]: any }, eventData: PreferenceChange): void {
+    $acceptConfigurationChanged(data: PreferenceData, eventData: PreferenceChangeExt[]): void {
         this.init(data);
         this._onDidChangeConfiguration.fire(this.toConfigurationChangeEvent(eventData));
     }
 
     getConfiguration(section?: string, resource?: theia.Uri | null, extensionId?: string): theia.WorkspaceConfiguration {
+        resource = resource === null ? undefined : resource;
         const preferences = this.toReadonlyValue(section
-            ? lookUp(this._preferences, section)
-            : this._preferences);
+            ? lookUp(this._preferences.getValue(undefined, this.workspace, resource), section)
+            : this._preferences.getValue(undefined, this.workspace, resource));
 
         const configuration: theia.WorkspaceConfiguration = {
             has(key: string): boolean {
@@ -107,7 +122,7 @@ export class PreferenceRegistryExtImpl implements PreferenceRegistryExt {
                                     return () => clonedTarget;
                                 }
                                 if (clonedConfig) {
-                                    clonedTarget = cloneTarget ? cloneTarget : lookUp(clonedConfig, accessor);
+                                    clonedTarget = clonedTarget ? clonedTarget : lookUp(clonedConfig, accessor);
                                     return clonedTarget[prop];
                                 }
                                 const res = targ[prop];
@@ -138,17 +153,44 @@ export class PreferenceRegistryExtImpl implements PreferenceRegistryExt {
             },
             update: (key: string, value: any, arg?: ConfigurationTarget | boolean): PromiseLike<void> => {
                 key = section ? `${section}.${key}` : key;
+                const resourceStr: string | undefined = resource ? resource.toString() : undefined;
                 if (typeof value !== 'undefined') {
-                    return this.proxy.$updateConfigurationOption(arg, key, value, resource);
+                    return this.proxy.$updateConfigurationOption(arg, key, value, resourceStr);
                 } else {
-                    return this.proxy.$removeConfigurationOption(arg, key, resource);
+                    return this.proxy.$removeConfigurationOption(arg, key, resourceStr);
                 }
             },
-            inspect: <T>(key: string): ConfigurationInspect<T> => {
-                throw new Error('Not implemented yet.');
+            inspect: <T>(key: string): ConfigurationInspect<T> | undefined => {
+                key = section ? `${section}.${key}` : key;
+                resource = resource === null ? undefined : resource;
+                const result = cloneDeep(this._preferences.inspect<T>(key, this.workspace, resource));
+
+                if (!result) {
+                    return undefined;
+                }
+
+                const configInspect: ConfigurationInspect<T> = { key };
+                if (typeof result.default !== 'undefined') {
+                    configInspect.defaultValue = result.default;
+                }
+                if (typeof result.user !== 'undefined') {
+                    configInspect.globalValue = result.user;
+                }
+                if (typeof result.workspace !== 'undefined') {
+                    configInspect.workspaceValue = result.workspace;
+                }
+                if (typeof result.workspaceFolder !== 'undefined') {
+                    configInspect.workspaceFolderValue = result.workspaceFolder;
+                }
+                return configInspect;
             }
         };
-        return configuration;
+
+        if (typeof preferences === 'object') {
+            mixin(configuration, preferences, false);
+        }
+
+        return Object.freeze(configuration);
     }
 
     private toReadonlyValue(data: any): any {
@@ -174,10 +216,32 @@ export class PreferenceRegistryExtImpl implements PreferenceRegistryExt {
         return readonlyProxy(data);
     }
 
-    private parse(data: any): any {
+    private parse(data: PreferenceData): Configuration {
+        const defaultConfiguration = this.getConfigurationModel(data[PreferenceScope.Default]);
+        const userConfiguration = this.getConfigurationModel(data[PreferenceScope.User]);
+        const workspaceConfiguration = this.getConfigurationModel(data[PreferenceScope.Workspace]);
+        const folderConfigurations = {} as { [resource: string]: ConfigurationModel };
+        Object.keys(data[PreferenceScope.Folder]).forEach(resource => {
+            folderConfigurations[resource] = this.getConfigurationModel(data[PreferenceScope.Folder][resource]);
+        });
+        return new Configuration(defaultConfiguration, userConfiguration, workspaceConfiguration, folderConfigurations);
+    }
+
+    private getConfigurationModel(data: { [key: string]: any }): ConfigurationModel {
+        if (!data) {
+            return new ConfigurationModel();
+        }
+        return new ConfigurationModel(this.parseConfigurationData(data), Object.keys(data));
+    }
+
+    private readonly OVERRIDE_PROPERTY = '\\[(.*)\\]$';
+    private readonly OVERRIDE_PROPERTY_PATTERN = new RegExp(this.OVERRIDE_PROPERTY);
+
+    private parseConfigurationData(data: { [key: string]: any }): { [key: string]: any } {
         return Object.keys(data).reduce((result: any, key: string) => {
             const parts = key.split('.');
             let branch = result;
+
             for (let i = 0; i < parts.length; i++) {
                 if (i === parts.length - 1) {
                     branch[parts[i]] = data[key];
@@ -187,19 +251,34 @@ export class PreferenceRegistryExtImpl implements PreferenceRegistryExt {
                     branch[parts[i]] = {};
                 }
                 branch = branch[parts[i]];
+
+                // overridden properties should be transformed into
+                // "[overridden_identifier]" : {
+                //              "property1" : "value1"
+                //              "property2" : "value2"
+                //  }
+                if (i === 0 && this.OVERRIDE_PROPERTY_PATTERN.test(parts[i])) {
+                    branch[key.substring(parts[0].length + 1)] = data[key];
+                    break;
+                }
             }
             return result;
         }, {});
     }
 
-    private toConfigurationChangeEvent(eventData: PreferenceChange): theia.ConfigurationChangeEvent {
+    private toConfigurationChangeEvent(eventData: PreferenceChangeExt[]): theia.ConfigurationChangeEvent {
         return Object.freeze({
             affectsConfiguration: (section: string, uri?: theia.Uri): boolean => {
-                const tree = eventData.preferenceName
-                    .split('.')
-                    .reverse()
-                    .reduce((prevValue: any, curValue: any) => ({ [curValue]: prevValue }), eventData.newValue);
-                return !!lookUp(tree, section);
+                // TODO respect uri
+                // TODO respect scopes shadowing
+                for (const change of eventData) {
+                    const tree = change.preferenceName
+                        .split('.')
+                        .reverse()
+                        .reduce((prevValue: any, curValue: any) => ({ [curValue]: prevValue }), change.newValue);
+                    return typeof lookUp(tree, section) !== 'undefined';
+                }
+                return false;
             }
         });
     }

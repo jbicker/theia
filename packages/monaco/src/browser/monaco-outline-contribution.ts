@@ -20,8 +20,8 @@ import SymbolKind = monaco.languages.SymbolKind;
 import { FrontendApplicationContribution, FrontendApplication, TreeNode } from '@theia/core/lib/browser';
 import { Range, EditorManager, EditorOpenerOptions } from '@theia/editor/lib/browser';
 import DocumentSymbolProviderRegistry = monaco.modes.DocumentSymbolProviderRegistry;
-import CancellationTokenSource = monaco.cancellation.CancellationTokenSource;
-import CancellationToken = monaco.cancellation.CancellationToken;
+import CancellationTokenSource = monaco.CancellationTokenSource;
+import CancellationToken = monaco.CancellationToken;
 import { DisposableCollection, Disposable } from '@theia/core';
 import { OutlineViewService } from '@theia/outline-view/lib/browser/outline-view-service';
 import { OutlineSymbolInformationNode } from '@theia/outline-view/lib/browser/outline-view-widget';
@@ -97,10 +97,12 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
         const editor = this.editorManager.currentEditor;
         if (editor) {
             const model = MonacoEditor.get(editor)!.getControl().getModel();
-            this.toDisposeOnEditor.push(model.onDidChangeContent(() => {
-                this.roots = undefined; // Invalidate the previously resolved roots.
-                this.updateOutline();
-            }));
+            if (model) {
+                this.toDisposeOnEditor.push(model.onDidChangeContent(() => {
+                    this.roots = undefined; // Invalidate the previously resolved roots.
+                    this.updateOutline();
+                }));
+            }
             this.toDisposeOnEditor.push(editor.editor.onSelectionChanged(selection => this.updateOutline(selection)));
         }
         this.updateOutline();
@@ -134,6 +136,7 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
             this.roots.forEach(resetSelection);
         } else {
             this.roots = [];
+            // eslint-disable-next-line @typescript-eslint/await-thenable
             const providers = await DocumentSymbolProviderRegistry.all(model);
             if (token.isCancellationRequested) {
                 return [];
@@ -145,7 +148,7 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
                     if (token.isCancellationRequested) {
                         return [];
                     }
-                    const nodes = this.createNodes(uri, symbols);
+                    const nodes = this.createNodes(uri, symbols || []);
                     this.roots.push(...nodes);
                 } catch {
                     /* collect symbols from other providers */
@@ -222,7 +225,7 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
      * If the argument is a `DocumentSymbol`, then `getFullRange` will be used to retrieve the range of the underlying symbol.
      */
     protected parentContains(candidate: DocumentSymbol | Range, parent: DocumentSymbol | Range, rangeBased: boolean): boolean {
-        // TODO: move this code to the `monaco-languageclient`: https://github.com/theia-ide/theia/pull/2885#discussion_r217800446
+        // TODO: move this code to the `monaco-languageclient`: https://github.com/eclipse-theia/theia/pull/2885#discussion_r217800446
         const candidateRange = Range.is(candidate) ? candidate : this.getFullRange(candidate);
         const parentRange = Range.is(parent) ? parent : this.getFullRange(parent);
         const sameStartLine = candidateRange.start.line === parentRange.start.line;
@@ -280,6 +283,7 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
             id,
             iconClass: SymbolKind[symbol.kind].toString().toLowerCase(),
             name: this.getName(symbol),
+            detail: this.getDetail(symbol),
             parent,
             uri,
             range: this.getNameRange(symbol),
@@ -296,7 +300,11 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
     }
 
     protected getName(symbol: DocumentSymbol): string {
-        return symbol.name + (symbol.detail || '');
+        return symbol.name;
+    }
+
+    protected getDetail(symbol: DocumentSymbol): string {
+        return symbol.detail;
     }
 
     protected createId(name: string, ids: Map<string, number>): string {
@@ -307,11 +315,13 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
     }
 
     protected shouldExpand(symbol: DocumentSymbol): boolean {
-        return [SymbolKind.Class,
-        SymbolKind.Enum, SymbolKind.File,
-        SymbolKind.Interface, SymbolKind.Module,
-        SymbolKind.Namespace, SymbolKind.Object,
-        SymbolKind.Package, SymbolKind.Struct].indexOf(symbol.kind) !== -1;
+        return [
+            SymbolKind.Class,
+            SymbolKind.Enum, SymbolKind.File,
+            SymbolKind.Interface, SymbolKind.Module,
+            SymbolKind.Namespace, SymbolKind.Object,
+            SymbolKind.Package, SymbolKind.Struct
+        ].indexOf(symbol.kind) !== -1;
     }
 
     protected orderByPosition(symbol: DocumentSymbol, symbol2: DocumentSymbol): number {
@@ -342,6 +352,7 @@ export interface MonacoOutlineSymbolInformationNode extends OutlineSymbolInforma
     uri: URI;
     range: Range;
     fullRange: Range;
+    detail?: string;
     parent: MonacoOutlineSymbolInformationNode | undefined;
     children: MonacoOutlineSymbolInformationNode[];
 }

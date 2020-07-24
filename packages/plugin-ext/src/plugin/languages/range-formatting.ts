@@ -17,9 +17,8 @@
 import * as theia from '@theia/plugin';
 import { DocumentsExtImpl } from '../documents';
 import * as Converter from '../type-converters';
-import URI from 'vscode-uri/lib/umd';
-import { FormattingOptions, SingleEditOperation, Range } from '../../api/model';
-import { createToken } from '../token-provider';
+import { URI } from 'vscode-uri';
+import { FormattingOptions, TextEdit, Range } from '../../common/plugin-api-rpc-model';
 
 export class RangeFormattingAdapter {
 
@@ -28,7 +27,7 @@ export class RangeFormattingAdapter {
         private readonly documents: DocumentsExtImpl
     ) { }
 
-    provideDocumentRangeFormattingEdits(resource: URI, range: Range, options: FormattingOptions): Promise<SingleEditOperation[] | undefined> {
+    provideDocumentRangeFormattingEdits(resource: URI, range: Range, options: FormattingOptions, token: theia.CancellationToken): Promise<TextEdit[] | undefined> {
         const document = this.documents.getDocumentData(resource);
         if (!document) {
             return Promise.reject(new Error(`There are no document for ${resource}`));
@@ -37,7 +36,8 @@ export class RangeFormattingAdapter {
         const doc = document.document;
         const ran = Converter.toRange(range);
 
-        return Promise.resolve(this.provider.provideDocumentRangeFormattingEdits(doc, ran, <any>options, createToken())).then(value => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return Promise.resolve(this.provider.provideDocumentRangeFormattingEdits(doc, ran, <any>options, token)).then(value => {
             if (Array.isArray(value)) {
                 return value.map(Converter.fromTextEdit);
             }

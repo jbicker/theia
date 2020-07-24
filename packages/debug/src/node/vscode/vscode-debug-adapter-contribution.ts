@@ -16,13 +16,14 @@
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { injectable, unmanaged } from 'inversify';
-import { DebugAdapterContribution, DebugAdapterExecutable } from '../debug-model';
+import { DebugAdapterExecutable, DebugAdapterContribution } from '../../common/debug-model';
 import { isWindows, isOSX } from '@theia/core/lib/common/os';
 import { IJSONSchema, IJSONSchemaSnippet } from '@theia/core/lib/common/json-schema';
+import { deepClone } from '@theia/core/lib/common/objects';
+import { injectable, unmanaged } from 'inversify';
 
 namespace nls {
-    export function localize(key: string, _default: string) {
+    export function localize(key: string, _default: string): string {
         return _default;
     }
 }
@@ -33,6 +34,11 @@ const INTERNAL_CONSOLE_OPTIONS_SCHEMA = {
     description: nls.localize('internalConsoleOptions', 'Controls when the internal debug console should open.')
 };
 
+export interface VSCodeExtensionPackage {
+    contributes: {
+        debuggers: VSCodeDebuggerContribution[]
+    }
+}
 export interface VSCodePlatformSpecificAdapterContribution {
     program?: string;
     args?: string[];
@@ -69,11 +75,13 @@ export namespace VSCodeDebuggerContribution {
     }
 }
 
-// TODO move to @theia/debug
 @injectable()
 export abstract class AbstractVSCodeDebugAdapterContribution implements DebugAdapterContribution {
 
+    protected readonly pckPath: string;
+    protected readonly pck: Promise<VSCodeExtensionPackage>;
     protected readonly debuggerContribution: Promise<VSCodeDebuggerContribution>;
+
     readonly label: Promise<string | undefined>;
     readonly languages: Promise<string[] | undefined>;
 
@@ -81,31 +89,45 @@ export abstract class AbstractVSCodeDebugAdapterContribution implements DebugAda
         @unmanaged() readonly type: string,
         @unmanaged() readonly extensionPath: string
     ) {
-        this.debuggerContribution = this.parse();
+        this.pckPath = path.join(this.extensionPath, 'package.json');
+        this.pck = this.parse();
+        this.debuggerContribution = this.resolveDebuggerContribution();
         this.label = this.debuggerContribution.then(({ label }) => label);
         this.languages = this.debuggerContribution.then(({ languages }) => languages);
+        this.schemaAttributes = this.resolveSchemaAttributes();
     }
-    protected async parse(): Promise<VSCodeDebuggerContribution> {
-        const nlsMap = require(path.join(this.extensionPath, 'package.nls.json'));
-        const pckPath = path.join(this.extensionPath, 'package.json');
-        let text = (await fs.readFile(pckPath)).toString();
-        for (const key of Object.keys(nlsMap)) {
-            const value = nlsMap[key];
-            text = text.split('%' + key + '%').join(value);
-        }
-        const pck: {
-            contributes: {
-                debuggers: VSCodeDebuggerContribution[]
+
+    protected async parse(): Promise<VSCodeExtensionPackage> {
+        let text = (await fs.readFile(this.pckPath)).toString();
+
+        const nlsPath = path.join(this.extensionPath, 'package.nls.json');
+        if (fs.existsSync(nlsPath)) {
+            const nlsMap: {
+                [key: string]: string
+            } = require(nlsPath);
+            for (const key of Object.keys(nlsMap)) {
+                const value = nlsMap[key].replace(/\"/g, '\\"');
+                text = text.split('%' + key + '%').join(value);
             }
-        } = JSON.parse(text);
+        }
+
+        return JSON.parse(text);
+    }
+
+    protected async resolveDebuggerContribution(): Promise<VSCodeDebuggerContribution> {
+        const pck = await this.pck;
         const debuggerContribution = pck.contributes.debuggers.find(d => d.type === this.type);
         if (!debuggerContribution) {
-            throw new Error(`Debugger contribution for '${this.type}' type is not found in ${pckPath}`);
+            throw new Error(`Debugger contribution for '${this.type}' type is not found in ${this.pckPath}`);
         }
         return debuggerContribution;
     }
 
+    protected schemaAttributes: Promise<IJSONSchema[]> | undefined;
     async getSchemaAttributes(): Promise<IJSONSchema[]> {
+        return this.schemaAttributes || (this.schemaAttributes = this.resolveSchemaAttributes());
+    }
+    protected async resolveSchemaAttributes(): Promise<IJSONSchema[]> {
         const debuggerContribution = await this.debuggerContribution;
         if (!debuggerContribution.configurationAttributes) {
             return [];
@@ -113,7 +135,7 @@ export abstract class AbstractVSCodeDebugAdapterContribution implements DebugAda
         const taskSchema = {}; // TODO
         const { configurationAttributes } = debuggerContribution;
         return Object.keys(configurationAttributes).map(request => {
-            const attributes: IJSONSchema = configurationAttributes[request];
+            const attributes: IJSONSchema = deepClone(configurationAttributes[request]);
             const defaultRequired = ['name', 'type', 'request'];
             attributes.required = attributes.required && attributes.required.length ? defaultRequired.concat(attributes.required) : defaultRequired;
             attributes.additionalProperties = false;
@@ -148,16 +170,18 @@ export abstract class AbstractVSCodeDebugAdapterContribution implements DebugAda
             };
             properties['preLaunchTask'] = {
                 anyOf: [taskSchema, {
-                    type: ['string', 'null'],
+                    type: ['string'],
                 }],
                 default: '',
+                defaultSnippets: [{ body: { task: '', type: '' } }],
                 description: nls.localize('debugPrelaunchTask', 'Task to run before debug session starts.')
             };
             properties['postDebugTask'] = {
                 anyOf: [taskSchema, {
-                    type: ['string', 'null'],
+                    type: ['string', ],
                 }],
                 default: '',
+                defaultSnippets: [{ body: { task: '', type: '' } }],
                 description: nls.localize('debugPostDebugTask', 'Task to run after debug session ends.')
             };
             properties['internalConsoleOptions'] = INTERNAL_CONSOLE_OPTIONS_SCHEMA;
@@ -194,25 +218,35 @@ export abstract class AbstractVSCodeDebugAdapterContribution implements DebugAda
         return debuggerContribution.configurationSnippets || [];
     }
 
-    async provideDebugAdapterExecutable(): Promise<DebugAdapterExecutable> {
+    async provideDebugAdapterExecutable(): Promise<DebugAdapterExecutable | undefined> {
         const contribution = await this.debuggerContribution;
         const info = VSCodeDebuggerContribution.toPlatformInfo(contribution);
-        let program = (info && info.program || contribution.program)!;
-        if (program) {
-            program = path.join(this.extensionPath, program);
+        let program = (info && info.program || contribution.program);
+        if (!program) {
+            return undefined;
         }
+        program = path.join(this.extensionPath, program);
         const programArgs = info && info.args || contribution.args || [];
         let runtime = info && info.runtime || contribution.runtime;
         if (runtime && runtime.indexOf('./') === 0) {
             runtime = path.join(this.extensionPath, runtime);
         }
-        const runtimeArgs = info && info.runtimeArgs || contribution.runtimeArgs || [];
-        const command = runtime ? runtime : program;
-        const args = runtime ? [...runtimeArgs, program, ...programArgs] : programArgs;
-        return {
-            command,
-            args
-        };
-    }
 
+        const runtimeArgs = info && info.runtimeArgs || contribution.runtimeArgs || [];
+        if (runtime === 'node') {
+            const modulePath = program;
+            return {
+                modulePath: modulePath,
+                execArgv: runtimeArgs,
+                args: programArgs
+            };
+        } else {
+            const command = runtime ? runtime : program;
+            const args = runtime ? [...runtimeArgs, program, ...programArgs] : programArgs;
+            return {
+                command,
+                args
+            };
+        }
+    }
 }

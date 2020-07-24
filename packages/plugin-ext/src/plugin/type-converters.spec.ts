@@ -18,8 +18,9 @@ import * as assert from 'assert';
 import * as Converter from './type-converters';
 import * as theia from '@theia/plugin';
 import * as types from './types-impl';
-import * as model from '../api/model';
+import * as model from '../common/plugin-api-rpc-model';
 import { MarkdownString, isMarkdownString } from './markdown-string';
+import { TaskDto } from '../common/plugin-api-rpc';
 
 describe('Type converters:', () => {
 
@@ -100,7 +101,7 @@ describe('Type converters:', () => {
                 assert.deepEqual(result === false, true);
             });
 
-            it('should reject non markdown object if it countains isTrusted field', () => {
+            it('should reject non markdown object if it contains isTrusted field', () => {
                 // given
                 const nonMarkdownObject = { isTrusted: true, field1: 5, field2: 'test' };
 
@@ -167,4 +168,233 @@ describe('Type converters:', () => {
 
     });
 
+    describe('convert tasks:', () => {
+        const customType = 'custom';
+        const shellType = 'shell';
+        const label = 'yarn build';
+        const source = 'source';
+        const command = 'yarn';
+        const commandLine = 'yarn run build';
+        const args = ['run', 'build'];
+        const cwd = '/projects/theia';
+        const additionalProperty = 'some property';
+
+        const shellTaskDto: TaskDto = {
+            type: shellType,
+            label,
+            source,
+            scope: 1,
+            command,
+            args,
+            options: { cwd },
+            additionalProperty
+        };
+
+        const shellTaskDtoWithCommandLine: TaskDto = {
+            type: shellType,
+            label,
+            source,
+            scope: 2,
+            command: commandLine,
+            options: { cwd },
+            additionalProperty
+        };
+
+        const shellPluginTask: theia.Task = {
+            name: label,
+            source,
+            scope: 1,
+            definition: {
+                type: shellType,
+                additionalProperty
+            },
+            execution: {
+                command,
+                args,
+                options: {
+                    cwd
+                }
+            }
+        };
+
+        const pluginTaskWithCommandLine: theia.Task = {
+            name: label,
+            source,
+            scope: 2,
+            definition: {
+                type: shellType,
+                additionalProperty
+            },
+            execution: {
+                commandLine,
+                options: {
+                    cwd
+                }
+            }
+        };
+
+        const customTaskDto: TaskDto = { ...shellTaskDto, type: customType };
+
+        const customTaskDtoWithCommandLine: TaskDto = { ...shellTaskDtoWithCommandLine, type: customType };
+
+        const customPluginTask: theia.Task = {
+            ...shellPluginTask, definition: {
+                type: customType,
+                additionalProperty
+            }
+        };
+
+        const customPluginTaskWithCommandLine: theia.Task = {
+            name: label,
+            source,
+            scope: 2,
+            definition: {
+                type: customType,
+                additionalProperty
+            },
+            execution: {
+                commandLine,
+                options: {
+                    cwd
+                }
+            }
+        };
+
+        it('should convert to task dto', () => {
+            // when
+            const result: TaskDto | undefined = Converter.fromTask(shellPluginTask);
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, shellTaskDto);
+        });
+
+        it('should convert from task dto', () => {
+            // when
+            const result: theia.Task = Converter.toTask(shellTaskDto);
+
+            assert.strictEqual(result.execution instanceof types.ShellExecution, true);
+
+            if (result.execution instanceof types.ShellExecution) {
+                assert.strictEqual(result.execution.commandLine, undefined);
+
+                result.execution = {
+                    args: result.execution.args,
+                    options: result.execution.options,
+                    command: result.execution.command
+                };
+            }
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, shellPluginTask);
+        });
+
+        it('should convert to task dto from task with commandline', () => {
+            // when
+            const result: TaskDto | undefined = Converter.fromTask(pluginTaskWithCommandLine);
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, shellTaskDtoWithCommandLine);
+        });
+
+        it('should convert task with custom type to dto', () => {
+            // when
+            const result: TaskDto | undefined = Converter.fromTask(customPluginTask);
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, customTaskDto);
+        });
+
+        it('should convert task with custom type from dto', () => {
+            // when
+            const result: theia.Task = Converter.toTask(customTaskDto);
+
+            assert.strictEqual(result.execution instanceof types.ShellExecution, true);
+
+            if (result.execution instanceof types.ShellExecution) {
+                assert.strictEqual(result.execution.commandLine, undefined);
+
+                result.execution = {
+                    args: result.execution.args,
+                    options: result.execution.options,
+                    command: result.execution.command
+                };
+            }
+
+            // then
+            assert.deepEqual(result, customPluginTask);
+        });
+
+        it('should convert to task dto from custom task with commandline', () => {
+            // when
+            const result: TaskDto | undefined = Converter.fromTask(customPluginTaskWithCommandLine);
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, customTaskDtoWithCommandLine);
+        });
+    });
+
+    describe('Webview Panel Show Options:', () => {
+        it('should create options from view column ', () => {
+            const viewColumn = types.ViewColumn.Five;
+
+            const showOptions: theia.WebviewPanelShowOptions = {
+                area: types.WebviewPanelTargetArea.Main,
+                viewColumn: types.ViewColumn.Four,
+                preserveFocus: false
+            };
+
+            // when
+            const result: theia.WebviewPanelShowOptions = Converter.toWebviewPanelShowOptions(viewColumn);
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, showOptions);
+        });
+
+        it('should create options from given "WebviewPanelShowOptions" object ', () => {
+            const incomingObject: theia.WebviewPanelShowOptions = {
+                area: types.WebviewPanelTargetArea.Main,
+                viewColumn: types.ViewColumn.Five,
+                preserveFocus: true
+            };
+
+            const showOptions: theia.WebviewPanelShowOptions = {
+                area: types.WebviewPanelTargetArea.Main,
+                viewColumn: types.ViewColumn.Four,
+                preserveFocus: true
+            };
+
+            // when
+            const result: theia.WebviewPanelShowOptions = Converter.toWebviewPanelShowOptions(incomingObject);
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, showOptions);
+        });
+
+        it('should set default "main" area', () => {
+            const incomingObject: theia.WebviewPanelShowOptions = {
+                viewColumn: types.ViewColumn.Five,
+                preserveFocus: false
+            };
+
+            const showOptions: theia.WebviewPanelShowOptions = {
+                area: types.WebviewPanelTargetArea.Main,
+                viewColumn: types.ViewColumn.Four,
+                preserveFocus: false
+            };
+
+            // when
+            const result: theia.WebviewPanelShowOptions = Converter.toWebviewPanelShowOptions(incomingObject);
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, showOptions);
+        });
+    });
 });

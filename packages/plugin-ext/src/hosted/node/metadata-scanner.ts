@@ -21,7 +21,7 @@ import { PluginPackage, PluginScanner, PluginMetadata } from '../../common/plugi
 export class MetadataScanner {
     private scanners: Map<string, PluginScanner> = new Map();
 
-    constructor(
+    constructor( // eslint-disable-next-line @typescript-eslint/indent
         @multiInject(PluginScanner) scanners: PluginScanner[]
     ) {
         scanners.forEach((scanner: PluginScanner) => {
@@ -29,11 +29,10 @@ export class MetadataScanner {
         });
     }
 
-    public getPluginMetadata(plugin: PluginPackage): PluginMetadata {
+    getPluginMetadata(plugin: PluginPackage): PluginMetadata {
         const scanner = this.getScanner(plugin);
         return {
             host: 'main',
-            source: plugin,
             model: scanner.getModel(plugin),
             lifecycle: scanner.getLifecycle(plugin)
         };
@@ -45,7 +44,7 @@ export class MetadataScanner {
      * @param {PluginPackage} plugin
      * @returns {PluginScanner}
      */
-    private getScanner(plugin: PluginPackage): PluginScanner {
+    getScanner(plugin: PluginPackage): PluginScanner {
         let scanner;
         if (plugin && plugin.engines) {
             const scanners = Object.keys(plugin.engines)

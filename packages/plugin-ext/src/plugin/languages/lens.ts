@@ -14,70 +14,89 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import URI from 'vscode-uri/lib/umd';
+import { URI } from 'vscode-uri';
 import * as theia from '@theia/plugin';
 import { DocumentsExtImpl } from '../documents';
-import { CodeLensSymbol } from '../../api/model';
+import { CodeLensSymbol } from '../../common/plugin-api-rpc-model';
 import * as Converter from '../type-converters';
 import { ObjectIdentifier } from '../../common/object-identifier';
-import { createToken } from '../token-provider';
-import { CommandsConverter } from '../command-registry';
+import { CommandRegistryImpl } from '../command-registry';
+import { DisposableCollection } from '@theia/core/lib/common/disposable';
 
 /** Adapts the calls from main to extension thread for providing/resolving the code lenses. */
 export class CodeLensAdapter {
 
-	private static readonly BAD_CMD: theia.Command = { id: 'missing', label: '<<MISSING COMMAND>>' };
+    private static readonly BAD_CMD: theia.Command = { command: 'missing', title: '<<MISSING COMMAND>>' };
 
-	private cacheId = 0;
-	private cache = new Map<number, theia.CodeLens>();
+    private cacheId = 0;
+    private readonly cache = new Map<number, theia.CodeLens>();
+    private readonly disposables = new Map<number, DisposableCollection>();
 
-	constructor(
-		private readonly provider: theia.CodeLensProvider,
-		private readonly documents: DocumentsExtImpl,
-		private readonly commands: CommandsConverter
-	) { }
+    constructor(
+        private readonly provider: theia.CodeLensProvider,
+        private readonly documents: DocumentsExtImpl,
+        private readonly commands: CommandRegistryImpl
+    ) { }
 
-	provideCodeLenses(resource: URI): Promise<CodeLensSymbol[] | undefined> {
-		const document = this.documents.getDocumentData(resource);
-		if (!document) {
-			return Promise.reject(new Error(`There is no document for ${resource}`));
-		}
+    provideCodeLenses(resource: URI, token: theia.CancellationToken): Promise<CodeLensSymbol[] | undefined> {
+        const document = this.documents.getDocumentData(resource);
+        if (!document) {
+            return Promise.reject(new Error(`There is no document for ${resource}`));
+        }
 
-		const doc = document.document;
+        const doc = document.document;
 
-		return Promise.resolve(this.provider.provideCodeLenses(doc, createToken())).then(lenses => {
-			if (Array.isArray(lenses)) {
-				return lenses.map(lens => {
-					const id = this.cacheId++;
-					const lensSymbol = ObjectIdentifier.mixin({
-						range: Converter.fromRange(lens.range)!,
-						command: this.commands.toInternal(lens.command)
-					}, id);
-					this.cache.set(id, lens);
-					return lensSymbol;
-				});
-			}
-			return undefined;
-		});
-	}
+        return Promise.resolve(this.provider.provideCodeLenses(doc, token)).then(lenses => {
+            if (Array.isArray(lenses)) {
+                return lenses.map(lens => {
+                    const cacheId = this.cacheId++;
+                    const toDispose = new DisposableCollection();
+                    const lensSymbol = ObjectIdentifier.mixin({
+                        range: Converter.fromRange(lens.range)!,
+                        command: this.commands.converter.toSafeCommand(lens.command, toDispose)
+                    }, cacheId);
+                    this.cache.set(cacheId, lens);
+                    this.disposables.set(cacheId, toDispose);
+                    return lensSymbol;
+                });
+            }
+            return undefined;
+        });
+    }
 
-	resolveCodeLens(resource: URI, symbol: CodeLensSymbol): Promise<CodeLensSymbol | undefined> {
-		const lens = this.cache.get(ObjectIdentifier.of(symbol));
-		if (!lens) {
-			return Promise.resolve(undefined);
-		}
+    async resolveCodeLens(resource: URI, symbol: CodeLensSymbol, token: theia.CancellationToken): Promise<CodeLensSymbol | undefined> {
+        const cacheId = ObjectIdentifier.of(symbol);
+        const lens = this.cache.get(cacheId);
+        if (!lens) {
+            return undefined;
+        }
 
-		let resolve: Promise<theia.CodeLens | undefined>;
-		if (typeof this.provider.resolveCodeLens !== 'function' || lens.isResolved) {
-			resolve = Promise.resolve(lens);
-		} else {
-			resolve = Promise.resolve(this.provider.resolveCodeLens(lens, createToken()));
-		}
+        let newLens: theia.CodeLens | undefined;
+        if (typeof this.provider.resolveCodeLens === 'function' && !lens.isResolved) {
+            newLens = await this.provider.resolveCodeLens(lens, token);
+            if (token.isCancellationRequested) {
+                return undefined;
+            }
+        }
+        newLens = newLens || lens;
 
-		return resolve.then(newLens => {
-			newLens = newLens || lens;
-			symbol.command = this.commands.toInternal(newLens.command || CodeLensAdapter.BAD_CMD);
-			return symbol;
-		});
-	}
+        const disposables = this.disposables.get(cacheId);
+        if (!disposables) {
+            // already been disposed of
+            return undefined;
+        }
+        symbol.command = this.commands.converter.toSafeCommand(newLens.command ? newLens.command : CodeLensAdapter.BAD_CMD, disposables);
+        return symbol;
+    }
+
+    releaseCodeLenses(ids: number[]): void {
+        ids.forEach(id => {
+            this.cache.delete(id);
+            const toDispose = this.disposables.get(id);
+            if (toDispose) {
+                toDispose.dispose();
+                this.disposables.delete(id);
+            }
+        });
+    }
 }

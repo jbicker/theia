@@ -16,19 +16,26 @@
 
 import { injectable, inject, named } from 'inversify';
 import { Registry, IOnigLib, IRawGrammar, parseRawGrammar } from 'vscode-textmate';
-import { ILogger, ContributionProvider } from '@theia/core';
+import { ILogger, ContributionProvider, DisposableCollection, Disposable } from '@theia/core';
 import { FrontendApplicationContribution, isBasicWasmSupported } from '@theia/core/lib/browser';
 import { ThemeService } from '@theia/core/lib/browser/theming';
 import { LanguageGrammarDefinitionContribution, getEncodedLanguageId } from './textmate-contribution';
 import { createTextmateTokenizer, TokenizerOption } from './textmate-tokenizer';
 import { TextmateRegistry } from './textmate-registry';
 import { MonacoThemeRegistry } from './monaco-theme-registry';
+import { EditorPreferences } from '@theia/editor/lib/browser/editor-preferences';
 
 export const OnigasmPromise = Symbol('OnigasmPromise');
 export type OnigasmPromise = Promise<IOnigLib>;
 
 @injectable()
 export class MonacoTextmateService implements FrontendApplicationContribution {
+
+    protected readonly tokenizerOption: TokenizerOption = {
+        lineLimit: 400
+    };
+
+    protected readonly _activatedLanguages = new Set<string>();
 
     protected grammarRegistry: Registry;
 
@@ -50,7 +57,10 @@ export class MonacoTextmateService implements FrontendApplicationContribution {
     @inject(MonacoThemeRegistry)
     protected readonly monacoThemeRegistry: MonacoThemeRegistry;
 
-    initialize() {
+    @inject(EditorPreferences)
+    protected readonly preferences: EditorPreferences;
+
+    initialize(): void {
         if (!isBasicWasmSupported) {
             console.log('Textmate support deactivated because WebAssembly is not detected.');
             return;
@@ -66,7 +76,7 @@ export class MonacoTextmateService implements FrontendApplicationContribution {
 
         this.grammarRegistry = new Registry({
             getOnigLib: () => this.onigasmPromise,
-            theme: this.monacoThemeRegistry.getTheme(MonacoThemeRegistry.DARK_DEFAULT_THEME),
+            theme: this.monacoThemeRegistry.getThemeData(this.currentEditorTheme),
             loadGrammar: async (scopeName: string) => {
                 const provider = this.textmateRegistry.getProvider(scopeName);
                 if (provider) {
@@ -90,23 +100,61 @@ export class MonacoTextmateService implements FrontendApplicationContribution {
             }
         });
 
-        this.themeService.onThemeChange(themeChange => {
-            const theme = this.monacoThemeRegistry.getTheme(themeChange.newTheme.editorTheme || MonacoThemeRegistry.DARK_DEFAULT_THEME);
-            if (theme) {
-                this.grammarRegistry.setTheme(theme);
+        this.tokenizerOption.lineLimit = this.preferences['editor.maxTokenizationLineLength'];
+        this.preferences.onPreferenceChanged(e => {
+            if (e.preferenceName === 'editor.maxTokenizationLineLength') {
+                this.tokenizerOption.lineLimit = this.preferences['editor.maxTokenizationLineLength'];
             }
         });
 
-        const registered = new Set<string>();
-        for (const { id } of monaco.languages.getLanguages()) {
-            if (!registered.has(id)) {
-                monaco.languages.onLanguage(id, () => this.activateLanguage(id));
-                registered.add(id);
-            }
+        this.updateTheme();
+        this.themeService.onThemeChange(() => this.updateTheme());
+
+        for (const id of this.textmateRegistry.languages) {
+            this.activateLanguage(id);
         }
     }
 
-    protected async activateLanguage(languageId: string) {
+    protected readonly toDisposeOnUpdateTheme = new DisposableCollection();
+
+    protected updateTheme(): void {
+        this.toDisposeOnUpdateTheme.dispose();
+
+        const currentEditorTheme = this.currentEditorTheme;
+        document.body.classList.add(currentEditorTheme);
+        this.toDisposeOnUpdateTheme.push(Disposable.create(() => document.body.classList.remove(currentEditorTheme)));
+
+        // first update registry to run tokenization with the proper theme
+        const theme = this.monacoThemeRegistry.getThemeData(currentEditorTheme);
+        if (theme) {
+            this.grammarRegistry.setTheme(theme);
+        }
+
+        // then trigger tokenization by setting monaco theme
+        monaco.editor.setTheme(currentEditorTheme);
+    }
+
+    protected get currentEditorTheme(): string {
+        return this.themeService.getCurrentTheme().editorTheme || MonacoThemeRegistry.DARK_DEFAULT_THEME;
+    }
+
+    activateLanguage(language: string): Disposable {
+        const toDispose = new DisposableCollection(
+            Disposable.create(() => { /* mark as not disposed */ })
+        );
+        toDispose.push(this.waitForLanguage(language, () =>
+            this.doActivateLanguage(language, toDispose)
+        ));
+        return toDispose;
+    }
+
+    protected async doActivateLanguage(languageId: string, toDispose: DisposableCollection): Promise<void> {
+        if (this._activatedLanguages.has(languageId)) {
+            return;
+        }
+        this._activatedLanguages.add(languageId);
+        toDispose.push(Disposable.create(() => this._activatedLanguages.delete(languageId)));
+
         const scopeName = this.textmateRegistry.getScope(languageId);
         if (!scopeName) {
             return;
@@ -120,12 +168,40 @@ export class MonacoTextmateService implements FrontendApplicationContribution {
         const initialLanguage = getEncodedLanguageId(languageId);
 
         await this.onigasmPromise;
+        if (toDispose.disposed) {
+            return;
+        }
         try {
             const grammar = await this.grammarRegistry.loadGrammarWithConfiguration(scopeName, initialLanguage, configuration);
-            const options = configuration.tokenizerOption ? configuration.tokenizerOption : TokenizerOption.DEFAULT;
-            monaco.languages.setTokensProvider(languageId, createTextmateTokenizer(grammar, options));
+            if (toDispose.disposed) {
+                return;
+            }
+            if (!grammar) {
+                throw new Error(`no grammar for ${scopeName}, ${initialLanguage}, ${JSON.stringify(configuration)}`);
+            }
+            const options = configuration.tokenizerOption ? configuration.tokenizerOption : this.tokenizerOption;
+            const tokenizer = createTextmateTokenizer(grammar, options);
+            toDispose.push(monaco.languages.setTokensProvider(languageId, tokenizer));
+            const support = monaco.modes.TokenizationRegistry.get(languageId);
+            const themeService = monaco.services.StaticServices.standaloneThemeService.get();
+            const languageIdentifier = monaco.services.StaticServices.modeService.get().getLanguageIdentifier(languageId);
+            const adapter = new monaco.services.TokenizationSupport2Adapter(themeService, languageIdentifier!, tokenizer);
+            support!.tokenize = adapter.tokenize.bind(adapter);
         } catch (error) {
             this.logger.warn('No grammar for this language id', languageId, error);
         }
     }
+
+    protected waitForLanguage(language: string, cb: () => {}): Disposable {
+        const modeService = monaco.services.StaticServices.modeService.get();
+        for (const modeId of Object.keys(modeService['_instantiatedModes'])) {
+            const mode = modeService['_instantiatedModes'][modeId];
+            if (mode.getId() === language) {
+                cb();
+                return Disposable.NULL;
+            }
+        }
+        return monaco.languages.onLanguage(language, cb);
+    }
+
 }

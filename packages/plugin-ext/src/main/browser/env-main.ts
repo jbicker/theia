@@ -16,9 +16,11 @@
 
 import { interfaces } from 'inversify';
 import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
-import { RPCProtocol } from '../../api/rpc-protocol';
-import { EnvMain } from '../../api/plugin-api';
+import { RPCProtocol } from '../../common/rpc-protocol';
+import { EnvMain } from '../../common/plugin-api-rpc';
 import { QueryParameters } from '../../common/env';
+import { isWindows, isOSX } from '@theia/core';
+import { OperatingSystem } from '../../plugin/types-impl';
 
 export class EnvMainImpl implements EnvMain {
     private envVariableServer: EnvVariablesServer;
@@ -31,6 +33,15 @@ export class EnvMainImpl implements EnvMain {
         return this.envVariableServer.getValue(envVarName).then(result => result ? result.value : undefined);
     }
 
+    async $getClientOperatingSystem(): Promise<OperatingSystem> {
+        if (isWindows) {
+            return OperatingSystem.Windows;
+        }
+        if (isOSX) {
+            return OperatingSystem.OSX;
+        }
+        return OperatingSystem.Linux;
+    }
 }
 
 /**

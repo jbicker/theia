@@ -15,29 +15,50 @@
  ********************************************************************************/
 
 import { ContainerModule } from 'inversify';
-import { FrontendApplicationContribution, QuickOpenContribution } from '@theia/core/lib/browser';
+import { FrontendApplicationContribution, QuickOpenContribution, KeybindingContribution } from '@theia/core/lib/browser';
 import { CommandContribution, MenuContribution, bindContributionProvider } from '@theia/core/lib/common';
 import { WebSocketConnectionProvider } from '@theia/core/lib/browser/messaging';
-import { QuickOpenTask } from './quick-open-task';
+import { QuickOpenTask, TaskTerminateQuickOpen, TaskRestartRunningQuickOpen, TaskRunningQuickOpen, TaskActionProvider, ConfigureTaskAction } from './quick-open-task';
 import { TaskContribution, TaskProviderRegistry, TaskResolverRegistry } from './task-contribution';
 import { TaskService } from './task-service';
 import { TaskConfigurations } from './task-configurations';
+import { ProvidedTaskConfigurations } from './provided-task-configurations';
 import { TaskFrontendContribution } from './task-frontend-contribution';
 import { createCommonBindings } from '../common/task-common-module';
 import { TaskServer, taskPath } from '../common/task-protocol';
 import { TaskWatcher } from '../common/task-watcher';
 import { bindProcessTaskModule } from './process/process-task-frontend-module';
+import { TaskSchemaUpdater } from './task-schema-updater';
+import { TaskDefinitionRegistry } from './task-definition-registry';
+import { ProblemMatcherRegistry } from './task-problem-matcher-registry';
+import { ProblemPatternRegistry } from './task-problem-pattern-registry';
+import { TaskConfigurationManager } from './task-configuration-manager';
+import { bindTaskPreferences } from './task-preferences';
+import '../../src/browser/style/index.css';
+import './tasks-monaco-contribution';
+import { TaskNameResolver } from './task-name-resolver';
+import { TaskSourceResolver } from './task-source-resolver';
+import { TaskTemplateSelector } from './task-templates';
+import { TaskTerminalWidgetManager } from './task-terminal-widget-manager';
+import { JsonSchemaContribution } from '@theia/core/lib/browser/json-schema-store';
 
 export default new ContainerModule(bind => {
     bind(TaskFrontendContribution).toSelf().inSingletonScope();
     bind(TaskService).toSelf().inSingletonScope();
+    bind(TaskActionProvider).toSelf().inSingletonScope();
+    bind(ConfigureTaskAction).toSelf().inSingletonScope();
 
-    for (const identifier of [FrontendApplicationContribution, CommandContribution, MenuContribution, QuickOpenContribution]) {
+    for (const identifier of [FrontendApplicationContribution, CommandContribution, KeybindingContribution, MenuContribution, QuickOpenContribution]) {
         bind(identifier).toService(TaskFrontendContribution);
     }
 
     bind(QuickOpenTask).toSelf().inSingletonScope();
+    bind(TaskRunningQuickOpen).toSelf().inSingletonScope();
+    bind(TaskTerminateQuickOpen).toSelf().inSingletonScope();
+    bind(TaskRestartRunningQuickOpen).toSelf().inSingletonScope();
     bind(TaskConfigurations).toSelf().inSingletonScope();
+    bind(ProvidedTaskConfigurations).toSelf().inSingletonScope();
+    bind(TaskConfigurationManager).toSelf().inSingletonScope();
 
     bind(TaskServer).toDynamicValue(ctx => {
         const connection = ctx.container.get(WebSocketConnectionProvider);
@@ -45,11 +66,22 @@ export default new ContainerModule(bind => {
         return connection.createProxy<TaskServer>(taskPath, taskWatcher.getTaskClient());
     }).inSingletonScope();
 
+    bind(TaskDefinitionRegistry).toSelf().inSingletonScope();
+    bind(ProblemMatcherRegistry).toSelf().inSingletonScope();
+    bind(ProblemPatternRegistry).toSelf().inSingletonScope();
+
     createCommonBindings(bind);
 
     bind(TaskProviderRegistry).toSelf().inSingletonScope();
     bind(TaskResolverRegistry).toSelf().inSingletonScope();
     bindContributionProvider(bind, TaskContribution);
+    bind(TaskSchemaUpdater).toSelf().inSingletonScope();
+    bind(JsonSchemaContribution).toService(TaskSchemaUpdater);
+    bind(TaskNameResolver).toSelf().inSingletonScope();
+    bind(TaskSourceResolver).toSelf().inSingletonScope();
+    bind(TaskTemplateSelector).toSelf().inSingletonScope();
+    bind(TaskTerminalWidgetManager).toSelf().inSingletonScope();
 
     bindProcessTaskModule(bind);
+    bindTaskPreferences(bind);
 });

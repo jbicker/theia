@@ -17,13 +17,19 @@
 import { injectable, inject } from 'inversify';
 import { find, map, toArray, some } from '@phosphor/algorithm';
 import { TabBar, Widget, DockPanel, Title, Panel, BoxPanel, BoxLayout, SplitPanel } from '@phosphor/widgets';
-import { Signal } from '@phosphor/signaling';
 import { MimeData } from '@phosphor/coreutils';
 import { Drag } from '@phosphor/dragdrop';
 import { AttachedProperty } from '@phosphor/properties';
 import { TabBarRendererFactory, TabBarRenderer, SHELL_TABBAR_CONTEXT_MENU, SideTabBar } from './tab-bars';
 import { SplitPositionHandler, SplitPositionOptions } from './split-panels';
+import { animationFrame } from '../browser';
 import { FrontendApplicationStateService } from '../frontend-application-state';
+import { TheiaDockPanel } from './theia-dock-panel';
+import { SidePanelToolbar } from './side-panel-toolbar';
+import { TabBarToolbarRegistry, TabBarToolbarFactory, TabBarToolbar } from './tab-bar-toolbar';
+import { DisposableCollection, Disposable } from '../../common/disposable';
+import { ContextMenuRenderer } from '../context-menu-renderer';
+import { MenuPath } from '../../common/menu';
 
 /** The class name added to the left and right area panels. */
 export const LEFT_RIGHT_AREA_CLASS = 'theia-app-sides';
@@ -32,6 +38,8 @@ export const LEFT_RIGHT_AREA_CLASS = 'theia-app-sides';
 const COLLAPSED_CLASS = 'theia-mod-collapsed';
 
 export const SidePanelHandlerFactory = Symbol('SidePanelHandlerFactory');
+
+export const SIDE_PANEL_TOOLBAR_CONTEXT_MENU: MenuPath = ['SIDE_PANEL_TOOLBAR_CONTEXT_MENU'];
 
 /**
  * A class which manages a dock panel and a related side bar. This is used for the left and right
@@ -57,10 +65,14 @@ export class SidePanelHandler {
      */
     tabBar: SideTabBar;
     /**
+     * A tool bar, which displays a title and widget specific command buttons.
+     */
+    toolBar: SidePanelToolbar;
+    /**
      * The widget container is a dock panel in `single-document` mode, which means that the panel
      * cannot be split.
      */
-    dockPanel: DockPanel;
+    dockPanel: TheiaDockPanel;
     /**
      * The panel that contains the tab bar and the dock panel. This one is hidden whenever the dock
      * panel is empty.
@@ -85,9 +97,14 @@ export class SidePanelHandler {
      */
     protected options: SidePanel.Options;
 
+    @inject(TabBarToolbarRegistry) protected tabBarToolBarRegistry: TabBarToolbarRegistry;
+    @inject(TabBarToolbarFactory) protected tabBarToolBarFactory: () => TabBarToolbar;
     @inject(TabBarRendererFactory) protected tabBarRendererFactory: () => TabBarRenderer;
     @inject(SplitPositionHandler) protected splitPositionHandler: SplitPositionHandler;
     @inject(FrontendApplicationStateService) protected readonly applicationStateService: FrontendApplicationStateService;
+
+    @inject(ContextMenuRenderer)
+    protected readonly contextMenuRenderer: ContextMenuRenderer;
 
     /**
      * Create the side bar and dock panel widgets.
@@ -96,6 +113,7 @@ export class SidePanelHandler {
         this.side = side;
         this.options = options;
         this.tabBar = this.createSideBar();
+        this.toolBar = this.createToolbar();
         this.dockPanel = this.createSidePanel();
         this.container = this.createContainer();
 
@@ -120,6 +138,7 @@ export class SidePanelHandler {
             suppressScrollX: true
         });
         tabBarRenderer.tabBar = sideBar;
+        sideBar.disposed.connect(() => tabBarRenderer.dispose());
         tabBarRenderer.contextMenuPath = SHELL_TABBAR_CONTEXT_MENU;
         sideBar.addClass('theia-app-' + side);
         sideBar.addClass(LEFT_RIGHT_AREA_CLASS);
@@ -143,6 +162,7 @@ export class SidePanelHandler {
             mode: 'single-document'
         });
         sidePanel.id = 'theia-' + this.side + '-side-panel';
+        sidePanel.addClass('theia-side-panel');
 
         sidePanel.widgetActivated.connect((sender, widget) => {
             this.tabBar.currentTitle = widget.title;
@@ -152,7 +172,35 @@ export class SidePanelHandler {
         return sidePanel;
     }
 
+    protected createToolbar(): SidePanelToolbar {
+        const toolbar = new SidePanelToolbar(this.tabBarToolBarRegistry, this.tabBarToolBarFactory, this.side);
+        toolbar.onContextMenu(e => this.showContextMenu(e));
+        return toolbar;
+    }
+
+    protected showContextMenu(e: MouseEvent): void {
+        const title = this.tabBar.currentTitle;
+        if (!title) {
+            return;
+        }
+        e.stopPropagation();
+        e.preventDefault();
+
+        this.contextMenuRenderer.render({
+            args: [title.owner],
+            menuPath: SIDE_PANEL_TOOLBAR_CONTEXT_MENU,
+            anchor: e
+        });
+    }
+
     protected createContainer(): Panel {
+        const contentBox = new BoxLayout({ direction: 'top-to-bottom', spacing: 0 });
+        BoxPanel.setStretch(this.toolBar, 0);
+        contentBox.addWidget(this.toolBar);
+        BoxPanel.setStretch(this.dockPanel, 1);
+        contentBox.addWidget(this.dockPanel);
+        const contentPanel = new BoxPanel({ layout: contentBox });
+
         const side = this.side;
         let direction: BoxLayout.Direction;
         switch (side) {
@@ -165,12 +213,12 @@ export class SidePanelHandler {
             default:
                 throw new Error('Illegal argument: ' + side);
         }
-        const boxLayout = new BoxLayout({ direction, spacing: 0 });
+        const containerLayout = new BoxLayout({ direction, spacing: 0 });
         BoxPanel.setStretch(this.tabBar, 0);
-        boxLayout.addWidget(this.tabBar);
-        BoxPanel.setStretch(this.dockPanel, 1);
-        boxLayout.addWidget(this.dockPanel);
-        const boxPanel = new BoxPanel({ layout: boxLayout });
+        containerLayout.addWidget(this.tabBar);
+        BoxPanel.setStretch(contentPanel, 1);
+        containerLayout.addWidget(contentPanel);
+        const boxPanel = new BoxPanel({ layout: containerLayout });
         boxPanel.id = 'theia-' + side + '-content-panel';
         return boxPanel;
     }
@@ -186,6 +234,7 @@ export class SidePanelHandler {
             rank: SidePanelHandler.rankProperty.get(title.owner),
             expanded: title === currentTitle
         }));
+        // eslint-disable-next-line no-null/no-null
         const size = currentTitle !== null ? this.getPanelSize() : this.state.lastPanelSize;
         return { type: 'sidepanel', items, size };
     }
@@ -194,7 +243,7 @@ export class SidePanelHandler {
      * Apply a side panel layout that has been previously created with `getLayoutData`.
      */
     setLayoutData(layoutData: SidePanel.LayoutData): void {
-        // tslint:disable-next-line:no-null-keyword
+        // eslint-disable-next-line no-null/no-null
         this.tabBar.currentTitle = null;
 
         let currentTitle: Title<Widget> | undefined;
@@ -293,13 +342,14 @@ export class SidePanelHandler {
     /**
      * Collapse the sidebar so no items are expanded.
      */
-    collapse(): void {
+    collapse(): Promise<void> {
         if (this.tabBar.currentTitle) {
-            // tslint:disable-next-line:no-null-keyword
+            // eslint-disable-next-line no-null/no-null
             this.tabBar.currentTitle = null;
         } else {
             this.refresh();
         }
+        return animationFrame();
     }
 
     /**
@@ -314,6 +364,12 @@ export class SidePanelHandler {
         this.dockPanel.addWidget(widget);
     }
 
+    // should be a property to preserve fn identity
+    protected updateToolbarTitle = (): void => {
+        const currentTitle = this.tabBar && this.tabBar.currentTitle;
+        this.toolBar.toolbarTitle = currentTitle || undefined;
+    };
+
     /**
      * Refresh the visibility of the side bar and dock panel.
      */
@@ -324,6 +380,7 @@ export class SidePanelHandler {
         const dockPanel = this.dockPanel;
         const isEmpty = tabBar.titles.length === 0;
         const currentTitle = tabBar.currentTitle;
+        // eslint-disable-next-line no-null/no-null
         const hideDockPanel = currentTitle === null;
         let relativeSizes: number[] | undefined;
 
@@ -441,11 +498,19 @@ export class SidePanelHandler {
         return result;
     }
 
+    protected readonly toDisposeOnCurrentTabChanged = new DisposableCollection();
+
     /**
      * Handle a `currentChanged` signal from the sidebar. The side panel is refreshed so it displays
      * the new selected widget.
      */
     protected onCurrentTabChanged(sender: SideTabBar, { currentTitle, currentIndex }: TabBar.ICurrentChangedArgs<Widget>): void {
+        this.toDisposeOnCurrentTabChanged.dispose();
+        if (currentTitle) {
+            this.updateToolbarTitle();
+            currentTitle.changed.connect(this.updateToolbarTitle);
+            this.toDisposeOnCurrentTabChanged.push(Disposable.create(() => currentTitle.changed.disconnect(this.updateToolbarTitle)));
+        }
         if (currentIndex >= 0) {
             this.state.lastActiveTabIndex = currentIndex;
             sender.revealTab(currentIndex);
@@ -463,14 +528,12 @@ export class SidePanelHandler {
         sender.releaseMouse();
 
         // Clone the selected tab and use that as drag image
-        // tslint:disable:no-null-keyword
         const clonedTab = tab.cloneNode(true) as HTMLElement;
-        clonedTab.style.width = null;
-        clonedTab.style.height = null;
+        clonedTab.style.width = '';
+        clonedTab.style.height = '';
         const label = clonedTab.getElementsByClassName('p-TabBar-tabLabel')[0] as HTMLElement;
-        label.style.width = null;
-        label.style.height = null;
-        // tslint:enable:no-null-keyword
+        label.style.width = '';
+        label.style.height = '';
 
         // Create and start a drag to move the selected tab to another panel
         const mimeData = new MimeData();
@@ -607,43 +670,4 @@ export namespace SidePanel {
         expanded = 'expanded',
         collapsing = 'collapsing'
     }
-}
-
-/**
- * This specialization of DockPanel adds various events that are used for implementing the
- * side panels of the application shell.
- */
-export class TheiaDockPanel extends DockPanel {
-
-    /**
-     * Emitted when a widget is added to the panel.
-     */
-    readonly widgetAdded = new Signal<this, Widget>(this);
-    /**
-     * Emitted when a widget is activated by calling `activateWidget`.
-     */
-    readonly widgetActivated = new Signal<this, Widget>(this);
-    /**
-     * Emitted when a widget is removed from the panel.
-     */
-    readonly widgetRemoved = new Signal<this, Widget>(this);
-
-    addWidget(widget: Widget, options?: DockPanel.IAddOptions): void {
-        if (this.mode === 'single-document' && widget.parent === this) {
-            return;
-        }
-        super.addWidget(widget, options);
-        this.widgetAdded.emit(widget);
-    }
-
-    activateWidget(widget: Widget): void {
-        super.activateWidget(widget);
-        this.widgetActivated.emit(widget);
-    }
-
-    protected onChildRemoved(msg: Widget.ChildMessage): void {
-        super.onChildRemoved(msg);
-        this.widgetRemoved.emit(msg.child);
-    }
-
 }

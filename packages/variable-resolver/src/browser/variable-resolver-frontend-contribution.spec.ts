@@ -20,7 +20,6 @@ let disableJSDOM = enableJSDOM();
 
 import * as chai from 'chai';
 import { Container, ContainerModule } from 'inversify';
-import { QuickOpenService } from '@theia/core/lib/browser';
 import { ILogger, bindContributionProvider } from '@theia/core/lib/common';
 import { MockLogger } from '@theia/core/lib/common/test/mock-logger';
 import { VariableContribution, VariableRegistry } from './variable';
@@ -52,8 +51,8 @@ describe('variable-resolver-frontend-contribution', () => {
             bind(ILogger).to(MockLogger);
             bind(VariableRegistry).toSelf().inSingletonScope();
 
-            bind(QuickOpenService).toSelf();
-            bind(VariableQuickOpenService).toSelf();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            bind(VariableQuickOpenService).toConstantValue({} as any); // mock VariableQuickOpenService
 
             bind(VariableResolverFrontendContribution).toSelf();
         });

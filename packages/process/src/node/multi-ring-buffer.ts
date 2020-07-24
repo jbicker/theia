@@ -20,7 +20,7 @@ import { Disposable } from '@theia/core/lib/common';
 
 /**
  * The MultiRingBuffer is a ring buffer implementation that allows
- * multiple independant readers.
+ * multiple independent readers.
  *
  * These readers are created using the getReader or getStream functions
  * to create a reader that can be read using deq() or one that is a readable stream.
@@ -39,18 +39,26 @@ export class MultiRingBufferReadableStream extends stream.Readable implements Di
         this.setEncoding(encoding);
     }
 
-    _read(size: number) {
+    _read(size: number): void {
         this.more = true;
         this.deq(size);
     }
 
-    onData() {
+    _destroy(err: Error | undefined, callback: (err?: Error) => void): void {
+        this.ringBuffer.closeStream(this);
+        this.ringBuffer.closeReader(this.reader);
+        this.disposed = true;
+        this.removeAllListeners();
+        callback(err);
+    }
+
+    onData(): void {
         if (this.more === true) {
             this.deq(-1);
         }
     }
 
-    deq(size: number) {
+    deq(size: number): void {
         if (this.disposed === true) {
             return;
         }
@@ -65,11 +73,8 @@ export class MultiRingBufferReadableStream extends stream.Readable implements Di
         while (buffer !== undefined && this.more === true && this.disposed === false);
     }
 
-    dispose() {
-        this.ringBuffer.closeStream(this);
-        this.ringBuffer.closeReader(this.reader);
-        this.disposed = true;
-        this.removeAllListeners();
+    dispose(): void {
+        this.destroy();
     }
 }
 
@@ -82,7 +87,7 @@ export interface MultiRingBufferOptions {
 export interface WrappedPosition { newPos: number, wrap: boolean }
 
 @injectable()
-export class MultiRingBuffer {
+export class MultiRingBuffer implements Disposable {
 
     protected readonly buffer: Buffer;
     protected head: number = -1;
@@ -110,8 +115,8 @@ export class MultiRingBuffer {
         this.streams = new Map();
     }
 
-    enq(astring: string, encoding = 'utf8'): void {
-        let buffer: Buffer = Buffer.from(astring, encoding);
+    enq(str: string, encoding = 'utf8'): void {
+        let buffer: Buffer = Buffer.from(str, encoding);
 
         // Take the last elements of string if it's too big, drop the rest
         if (buffer.length > this.maxSize) {
@@ -146,27 +151,27 @@ export class MultiRingBuffer {
         this.onData(startHead);
     }
 
-    getReader() {
+    getReader(): number {
         this.readers.set(this.readerId, this.tail);
         return this.readerId++;
     }
 
-    closeReader(id: number) {
+    closeReader(id: number): void {
         this.readers.delete(id);
     }
 
     getStream(encoding?: string): MultiRingBufferReadableStream {
         const reader = this.getReader();
-        const astream = new MultiRingBufferReadableStream(this, reader, encoding);
-        this.streams.set(astream, reader);
-        return astream;
+        const readableStream = new MultiRingBufferReadableStream(this, reader, encoding);
+        this.streams.set(readableStream, reader);
+        return readableStream;
     }
 
-    closeStream(astream: MultiRingBufferReadableStream) {
-        this.streams.delete(<MultiRingBufferReadableStream>astream);
+    closeStream(readableStream: MultiRingBufferReadableStream): void {
+        this.streams.delete(<MultiRingBufferReadableStream>readableStream);
     }
 
-    protected onData(start: number) {
+    protected onData(start: number): void {
         /*  Any stream that has read everything already
          *  Should go back to the last buffer in start offset */
         for (const [id, pos] of this.readers) {
@@ -175,8 +180,8 @@ export class MultiRingBuffer {
             }
         }
         /* Notify the streams there's new data. */
-        for (const [astream] of this.streams) {
-            astream.onData();
+        for (const [readableStream] of this.streams) {
+            readableStream.onData();
         }
     }
 
@@ -219,7 +224,7 @@ export class MultiRingBuffer {
         return buffer;
     }
 
-    sizeForReader(id: number) {
+    sizeForReader(id: number): number {
         const pos = this.readers.get(id);
         if (pos === undefined) {
             return 0;
@@ -228,18 +233,18 @@ export class MultiRingBuffer {
         return this.sizeFrom(pos, this.head, this.isWrapped(pos, this.head));
     }
 
-    size() {
+    size(): number {
         return this.sizeFrom(this.tail, this.head, this.isWrapped(this.tail, this.head));
     }
 
-    protected isWrapped(from: number, to: number) {
+    protected isWrapped(from: number, to: number): boolean {
         if (to < from) {
             return true;
         } else {
             return false;
         }
     }
-    protected sizeFrom(from: number, to: number, wrap: boolean) {
+    protected sizeFrom(from: number, to: number, wrap: boolean): number {
         if (from === -1 || to === -1) {
             return 0;
         } else {
@@ -251,7 +256,7 @@ export class MultiRingBuffer {
         }
     }
 
-    emptyForReader(id: number) {
+    emptyForReader(id: number): boolean {
         const pos = this.readers.get(id);
         if (pos === undefined || pos === -1) {
             return true;
@@ -276,8 +281,17 @@ export class MultiRingBuffer {
         return this.readers.size;
     }
 
+    /**
+     * Dispose all the attached readers/streams.
+     */
+    dispose(): void {
+        for (const readableStream of this.streams.keys()) {
+            readableStream.dispose();
+        }
+    }
+
     /* Position should be incremented if it goes pass end.  */
-    protected shouldIncPos(pos: number, end: number, size: number) {
+    protected shouldIncPos(pos: number, end: number, size: number): boolean {
         const { newPos: newHead, wrap } = this.inc(end, size);
 
         /* Tail Head */
@@ -311,7 +325,7 @@ export class MultiRingBuffer {
     }
 
     /* Increment the main tail and all the reader positions. */
-    protected incTails(size: number) {
+    protected incTails(size: number): void {
         this.tail = this.incTail(this.tail, size).newPos;
 
         for (const [id, pos] of this.readers) {

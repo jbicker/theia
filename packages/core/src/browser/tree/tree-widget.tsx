@@ -16,16 +16,16 @@
 
 import { injectable, inject, postConstruct } from 'inversify';
 import { Message } from '@phosphor/messaging';
-import { Disposable, MenuPath } from '../../common';
-import { Key, KeyCode, KeyModifier } from '../keys';
+import { Disposable, MenuPath, SelectionService } from '../../common';
+import { Key, KeyCode, KeyModifier } from '../keyboard/keys';
 import { ContextMenuRenderer } from '../context-menu-renderer';
 import { StatefulWidget } from '../shell';
-import { EXPANSION_TOGGLE_CLASS, SELECTED_CLASS, COLLAPSED_CLASS, FOCUS_CLASS, Widget } from '../widgets';
+import { EXPANSION_TOGGLE_CLASS, SELECTED_CLASS, COLLAPSED_CLASS, FOCUS_CLASS, Widget, BUSY_CLASS } from '../widgets';
 import { TreeNode, CompositeTreeNode } from './tree';
 import { TreeModel } from './tree-model';
 import { ExpandableTreeNode } from './tree-expansion';
 import { SelectableTreeNode, TreeSelection } from './tree-selection';
-import { TreeDecoration, TreeDecoratorService } from './tree-decorator';
+import { TreeDecoratorService, TreeDecoration, DecoratedTreeNode } from './tree-decorator';
 import { notEmpty } from '../../common/objects';
 import { isOSX } from '../../common/os';
 import { ReactWidget } from '../widgets/react-widget';
@@ -35,6 +35,9 @@ import { TopDownTreeIterator } from './tree-iterator';
 import { SearchBox, SearchBoxFactory, SearchBoxProps } from './search-box';
 import { TreeSearch } from './tree-search';
 import { ElementExt } from '@phosphor/domutils';
+import { TreeWidgetSelection } from './tree-widget-selection';
+import { MaybePromise } from '../../common/types';
+import { LabelProvider } from '../label-provider';
 
 const debounce = require('lodash.debounce');
 
@@ -51,6 +54,10 @@ export const COMPOSITE_TREE_NODE_CLASS = 'theia-CompositeTreeNode';
 export const TREE_NODE_CAPTION_CLASS = 'theia-TreeNodeCaption';
 
 export const TreeProps = Symbol('TreeProps');
+
+/**
+ * Representation of tree properties.
+ */
 export interface TreeProps {
 
     /**
@@ -64,27 +71,37 @@ export interface TreeProps {
      */
     readonly leftPadding: number;
 
+    readonly expansionTogglePadding: number;
+
     /**
      * `true` if the tree widget support multi-selection. Otherwise, `false`. Defaults to `false`.
      */
     readonly multiSelect?: boolean;
 
     /**
-     * 'true' if the tree widget support searching. Otherwise, `false`. Defaults to `false`.
+     * `true` if the tree widget support searching. Otherwise, `false`. Defaults to `false`.
      */
     readonly search?: boolean
 
     /**
-     * 'true' if the tree widget should be virtualized searching. Otherwise, `false`. Defaults to `true`.
+     * `true` if the tree widget should be virtualized searching. Otherwise, `false`. Defaults to `true`.
      */
     readonly virtualized?: boolean
 
     /**
-     * 'true' if the selected node should be auto scrolled only if the widget is active. Otherwise, `false`. Defaults to `false`.
+     * `true` if the selected node should be auto scrolled only if the widget is active. Otherwise, `false`. Defaults to `false`.
      */
     readonly scrollIfActive?: boolean
+
+    /**
+     * `true` if a tree widget contributes to the global selection. Defaults to `false`.
+     */
+    readonly globalSelection?: boolean;
 }
 
+/**
+ * Representation of node properties.
+ */
 export interface NodeProps {
 
     /**
@@ -94,8 +111,12 @@ export interface NodeProps {
 
 }
 
+/**
+ * The default tree properties.
+ */
 export const defaultTreeProps: TreeProps = {
-    leftPadding: 16
+    leftPadding: 8,
+    expansionTogglePadding: 18
 };
 
 export namespace TreeWidget {
@@ -104,8 +125,17 @@ export namespace TreeWidget {
      * Bare minimum common interface of the keyboard and the mouse event with respect to the key maskings.
      */
     export interface ModifierAwareEvent {
+        /**
+         * Determines if the modifier aware event has the `meta` key masking.
+         */
         readonly metaKey: boolean;
+        /**
+         * Determines if the modifier aware event has the `ctrl` key masking.
+         */
         readonly ctrlKey: boolean;
+        /**
+         * Determines if the modifier aware event has the `shift` key masking.
+         */
         readonly shiftKey: boolean;
     }
 
@@ -126,6 +156,14 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
 
     protected decorations: Map<string, TreeDecoration.Data[]> = new Map();
 
+    @inject(SelectionService)
+    protected readonly selectionService: SelectionService;
+
+    @inject(LabelProvider)
+    protected readonly labelProvider: LabelProvider;
+
+    protected shouldScrollToRow = true;
+
     constructor(
         @inject(TreeProps) readonly props: TreeProps,
         @inject(TreeModel) readonly model: TreeModel,
@@ -133,7 +171,8 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
     ) {
         super();
         this.scrollOptions = {
-            suppressScrollX: true
+            suppressScrollX: true,
+            minScrollbarLength: 35
         };
         this.addClass(TREE_CLASS);
         this.node.tabIndex = 0;
@@ -142,7 +181,7 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
     @postConstruct()
     protected init(): void {
         if (this.props.search) {
-            this.searchBox = this.searchBoxFactory(SearchBoxProps.DEFAULT);
+            this.searchBox = this.searchBoxFactory({ ...SearchBoxProps.DEFAULT, showButtons: true });
             this.toDispose.pushAll([
                 this.searchBox,
                 this.searchBox.onTextChange(async data => {
@@ -151,8 +190,18 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
                     this.update();
                 }),
                 this.searchBox.onClose(data => this.treeSearch.filter(undefined)),
-                this.searchBox.onNext(() => this.model.selectNextNode()),
-                this.searchBox.onPrevious(() => this.model.selectPrevNode()),
+                this.searchBox.onNext(() => {
+                    // Enable next selection if there are currently highlights.
+                    if (this.searchHighlights.size > 1) {
+                        this.model.selectNextNode();
+                    }
+                }),
+                this.searchBox.onPrevious(() => {
+                    // Enable previous selection if there are currently highlights.
+                    if (this.searchHighlights.size > 1) {
+                        this.model.selectPrevNode();
+                    }
+                }),
                 this.treeSearch,
                 this.treeSearch.onFilteredNodesChanged(nodes => {
                     const node = nodes.find(SelectableTreeNode.is);
@@ -169,15 +218,46 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
             this.model,
             this.model.onChanged(() => this.updateRows()),
             this.model.onSelectionChanged(() => this.updateScrollToRow({ resize: false })),
+            this.model.onDidChangeBusy(() => this.update()),
             this.model.onNodeRefreshed(() => this.updateDecorations()),
             this.model.onExpansionChanged(() => this.updateDecorations()),
             this.decoratorService,
-            this.decoratorService.onDidChangeDecorations(() => this.updateDecorations())
+            this.decoratorService.onDidChangeDecorations(() => this.updateDecorations()),
+            this.labelProvider.onDidChange(e => {
+                for (const row of this.rows.values()) {
+                    if (e.affects(row)) {
+                        this.forceUpdate();
+                        return;
+                    }
+                }
+            })
         ]);
         setTimeout(() => {
             this.updateRows();
             this.updateDecorations();
         });
+        if (this.props.globalSelection) {
+            this.toDispose.pushAll([
+                this.model.onSelectionChanged(() => {
+                    if (this.node.contains(document.activeElement)) {
+                        this.updateGlobalSelection();
+                    }
+                }),
+                Disposable.create(() => {
+                    const selection = this.selectionService.selection;
+                    if (TreeWidgetSelection.isSource(selection, this)) {
+                        this.selectionService.selection = undefined;
+                    }
+                })
+            ]);
+        }
+    }
+
+    /**
+     * Update the global selection for the tree.
+     */
+    protected updateGlobalSelection(): void {
+        this.selectionService.selection = TreeWidgetSelection.create(this);
     }
 
     protected rows = new Map<string, TreeWidget.NodeRow>();
@@ -210,15 +290,39 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         this.updateScrollToRow();
     }
 
+    /**
+     * Row index to ensure visibility.
+     * - Used to forcefully scroll if necessary.
+     */
     protected scrollToRow: number | undefined;
+    /**
+     * Update the `scrollToRow`.
+     * @param updateOptions the tree widget force update options.
+     */
     protected updateScrollToRow(updateOptions?: TreeWidget.ForceUpdateOptions): void {
-        const selected = this.model.selectedNodes;
-        const node: TreeNode | undefined = selected.find(SelectableTreeNode.hasFocus) || selected[0];
-        const row = node && this.rows.get(node.id);
-        this.scrollToRow = row && row.index;
+        this.scrollToRow = this.getScrollToRow();
         this.forceUpdate(updateOptions);
     }
 
+    /**
+     * Get the `scrollToRow`.
+     *
+     * @returns the `scrollToRow` if available.
+     */
+    protected getScrollToRow(): number | undefined {
+        if (!this.shouldScrollToRow) {
+            return undefined;
+        }
+        const selected = this.model.selectedNodes;
+        const node: TreeNode | undefined = selected.find(SelectableTreeNode.hasFocus) || selected[0];
+        const row = node && this.rows.get(node.id);
+        return row && row.index;
+    }
+
+    /**
+     * Update tree decorations.
+     * - Updating decorations are debounced in order to limit the number of expensive updates.
+     */
     protected readonly updateDecorations = debounce(() => this.doUpdateDecorations(), 150);
     protected async doUpdateDecorations(): Promise<void> {
         this.decorations = await this.decoratorService.getDecorations(this.model);
@@ -229,7 +333,7 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
      * Force deep resizing and rendering of rows.
      * https://github.com/bvaughn/react-virtualized/blob/master/docs/List.md#recomputerowheights-index-number
      */
-    protected forceUpdate({ resize }: TreeWidget.ForceUpdateOptions = { resize: true }): void {
+    protected forceUpdate({ resize }: TreeWidget.ForceUpdateOptions = { resize: false }): void {
         if (this.view && this.view.list) {
             if (resize && this.isVisible) {
                 this.view.cache.clearAll();
@@ -243,19 +347,37 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
 
     protected onActivateRequest(msg: Message): void {
         super.onActivateRequest(msg);
-        this.node.focus();
-        if (this.model.selectedNodes.length === 0) {
-            const root = this.model.root;
-            if (SelectableTreeNode.is(root)) {
-                this.model.selectNode(root);
-            } else if (CompositeTreeNode.is(root) && root.children.length >= 1) {
-                const firstChild = root.children[0];
-                if (SelectableTreeNode.is(firstChild)) {
-                    this.model.selectNode(firstChild);
-                }
+        this.node.focus({ preventScroll: true });
+    }
+
+    /**
+     * Actually focus the tree node.
+     */
+    protected doFocus(): void {
+        if (!this.model.selectedNodes.length) {
+            const node = this.getNodeToFocus();
+            if (SelectableTreeNode.is(node)) {
+                this.model.selectNode(node);
             }
         }
+        // It has to be called after nodes are selected.
+        if (this.props.globalSelection) {
+            this.updateGlobalSelection();
+        }
         this.forceUpdate();
+    }
+
+    /**
+     * Get the tree node to focus.
+     *
+     * @returns the node to focus if available.
+     */
+    protected getNodeToFocus(): SelectableTreeNode | undefined {
+        const root = this.model.root;
+        if (SelectableTreeNode.isVisible(root)) {
+            return root;
+        }
+        return this.model.getNextSelectableNode(root);
     }
 
     protected onUpdateRequest(msg: Message): void {
@@ -267,24 +389,40 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
 
     protected onResize(msg: Widget.ResizeMessage): void {
         super.onResize(msg);
-        this.forceUpdate();
+        this.forceUpdate({ resize: true });
     }
 
     protected render(): React.ReactNode {
         return React.createElement('div', this.createContainerAttributes(), this.renderTree(this.model));
     }
 
+    /**
+     * Create the container attributes for the widget.
+     */
     protected createContainerAttributes(): React.HTMLAttributes<HTMLElement> {
+        const classNames = [TREE_CONTAINER_CLASS];
+        if (!this.rows.size) {
+            classNames.push('empty');
+        }
         return {
-            className: TREE_CONTAINER_CLASS,
+            className: classNames.join(' '),
             onContextMenu: event => this.handleContextMenuEvent(this.getContainerTreeNode(), event)
         };
     }
+    /**
+     * Get the container tree node.
+     *
+     * @returns the tree node for the container if available.
+     */
     protected getContainerTreeNode(): TreeNode | undefined {
         return this.model.root;
     }
 
     protected view: TreeWidget.View | undefined;
+    /**
+     * Render the tree widget.
+     * @param model the tree model.
+     */
     protected renderTree(model: TreeModel): React.ReactNode {
         if (model.root) {
             const rows = Array.from(this.rows.values());
@@ -302,11 +440,14 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
                 handleScroll={this.handleScroll}
             />;
         }
-        // tslint:disable-next-line:no-null-keyword
+        // eslint-disable-next-line no-null/no-null
         return null;
     }
 
     scrollArea: Element = this.node;
+    /**
+     * Scroll to the selected tree node.
+     */
     protected scrollToSelected(): void {
         if (this.props.scrollIfActive === true && !this.node.contains(document.activeElement)) {
             return;
@@ -322,22 +463,43 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         }
     }
 
+    /**
+     * Handle the scroll event.
+     */
     protected readonly handleScroll = (info: ScrollParams) => {
         this.node.scrollTop = info.scrollTop;
-    }
+    };
 
+    /**
+     * Render the node row.
+     */
     protected readonly renderNodeRow = (row: TreeWidget.NodeRow) => this.doRenderNodeRow(row);
+    /**
+     * Actually render the node row.
+     */
     protected doRenderNodeRow({ index, node, depth }: TreeWidget.NodeRow): React.ReactNode {
         return this.renderNode(node, { depth });
     }
 
+    /**
+     * Render the tree node given the node properties.
+     * @param node the tree node.
+     * @param props the node properties.
+     */
     protected renderIcon(node: TreeNode, props: NodeProps): React.ReactNode {
-        // tslint:disable-next-line:no-null-keyword
+        // eslint-disable-next-line no-null/no-null
         return null;
     }
 
+    /**
+     * Toggle the node.
+     */
     protected readonly toggle = (event: React.MouseEvent<HTMLElement>) => this.doToggle(event);
-    protected doToggle(event: React.MouseEvent<HTMLElement>) {
+    /**
+     * Actually toggle the tree node.
+     * @param event the mouse click event.
+     */
+    protected doToggle(event: React.MouseEvent<HTMLElement>): void {
         const nodeId = event.currentTarget.getAttribute('data-node-id');
         if (nodeId) {
             const node = this.model.getNode(nodeId);
@@ -346,24 +508,36 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         event.stopPropagation();
     }
 
+    /**
+     * Render the node expansion toggle.
+     * @param node the tree node.
+     * @param props the node properties.
+     */
     protected renderExpansionToggle(node: TreeNode, props: NodeProps): React.ReactNode {
         if (!this.isExpandable(node)) {
-            // tslint:disable-next-line:no-null-keyword
+            // eslint-disable-next-line no-null/no-null
             return null;
         }
         const classes = [TREE_NODE_SEGMENT_CLASS, EXPANSION_TOGGLE_CLASS];
         if (!node.expanded) {
             classes.push(COLLAPSED_CLASS);
         }
+        if (node.busy) {
+            classes.push(BUSY_CLASS);
+        }
         const className = classes.join(' ');
         return <div
             data-node-id={node.id}
             className={className}
-            style={{ paddingLeft: '4px' }}
             onClick={this.toggle}>
         </div>;
     }
 
+    /**
+     * Render the tree node caption given the node properties.
+     * @param node the tree node.
+     * @param props the node properties.
+     */
     protected renderCaption(node: TreeNode, props: NodeProps): React.ReactNode {
         const tooltip = this.getDecorationData(node, 'tooltip').filter(notEmpty).join(' • ');
         const classes = [TREE_NODE_SEGMENT_CLASS];
@@ -381,7 +555,7 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
             };
         }
         const children: React.ReactNode[] = [];
-        const caption = node.name;
+        const caption = this.toNodeName(node);
         const highlight = this.getDecorationData(node, 'highlight')[0];
         if (highlight) {
             children.push(this.toReactNode(caption, highlight));
@@ -395,6 +569,11 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return React.createElement('div', attrs, ...children);
     }
 
+    /**
+     * Update the node given the caption and highlight.
+     * @param caption the caption.
+     * @param highlight the tree decoration caption highlight.
+     */
     protected toReactNode(caption: string, highlight: TreeDecoration.CaptionHighlight): React.ReactNode[] {
         let style: React.CSSProperties = {};
         if (highlight.color) {
@@ -411,7 +590,7 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         }
         const createChildren = (fragment: TreeDecoration.CaptionHighlight.Fragment) => {
             const { data } = fragment;
-            if (fragment.highligh) {
+            if (fragment.highlight) {
                 return <mark className={TreeDecoration.Styles.CAPTION_HIGHLIGHT_CLASS} style={style}>{data}</mark>;
             } else {
                 return data;
@@ -420,24 +599,42 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return TreeDecoration.CaptionHighlight.split(caption, highlight).map(createChildren);
     }
 
+    /**
+     * Decorate the tree caption.
+     * @param node the tree node.
+     * @param attrs the additional attributes.
+     */
     protected decorateCaption(node: TreeNode, attrs: React.HTMLAttributes<HTMLElement>): React.Attributes & React.HTMLAttributes<HTMLElement> {
-        const style = this.getDecorationData(node, 'fontData').filter(notEmpty).reverse().map(fontData => this.applyFontStyles({}, fontData)).reduce((acc, current) =>
-            ({
+        const style = this.getDecorationData(node, 'fontData')
+            .filter(notEmpty)
+            .reverse()
+            .map(fontData => this.applyFontStyles({}, fontData))
+            .reduce((acc, current) => ({
                 ...acc,
                 ...current
-            })
-            , {});
+            }), {});
         return {
             ...attrs,
             style
         };
     }
 
+    /**
+     * Determine if the tree node contains trailing suffixes.
+     * @param node the tree node.
+     *
+     * @returns `true` if the tree node contains trailing suffices.
+     */
     protected hasTrailingSuffixes(node: TreeNode): boolean {
         return this.getDecorationData(node, 'captionSuffixes').filter(notEmpty).reduce((acc, current) => acc.concat(current), []).length > 0;
     }
 
-    protected applyFontStyles(original: React.CSSProperties, fontData: TreeDecoration.FontData | undefined) {
+    /**
+     * Apply font styles to the tree.
+     * @param original the original css properties.
+     * @param fontData the optional `fontData`.
+     */
+    protected applyFontStyles(original: React.CSSProperties, fontData: TreeDecoration.FontData | undefined): React.CSSProperties {
         if (fontData === undefined) {
             return original;
         }
@@ -481,6 +678,12 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return modified;
     }
 
+    /**
+     * Render caption affixes for the given tree node.
+     * @param node the tree node.
+     * @param props the node properties.
+     * @param affixKey the affix key.
+     */
     protected renderCaptionAffixes(node: TreeNode, props: NodeProps, affixKey: 'captionPrefixes' | 'captionSuffixes'): React.ReactNode {
         const suffix = affixKey === 'captionSuffixes';
         const affixClass = suffix ? TreeDecoration.Styles.CAPTION_SUFFIX_CLASS : TreeDecoration.Styles.CAPTION_PREFIX_CLASS;
@@ -505,23 +708,30 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return <React.Fragment>{children}</React.Fragment>;
     }
 
+    /**
+     * Decorate the tree node icon.
+     * @param node the tree node.
+     * @param icon the icon.
+     */
     protected decorateIcon(node: TreeNode, icon: React.ReactNode | null): React.ReactNode {
+        // eslint-disable-next-line no-null/no-null
         if (icon === null) {
-            // tslint:disable-next-line:no-null-keyword
+            // eslint-disable-next-line no-null/no-null
             return null;
         }
 
         const overlayIcons: React.ReactNode[] = [];
         new Map(this.getDecorationData(node, 'iconOverlay').reverse().filter(notEmpty)
-            .map(overlay => [overlay.position, overlay] as [TreeDecoration.IconOverlayPosition, TreeDecoration.IconOverlay]))
+            .map(overlay => [overlay.position, overlay] as [TreeDecoration.IconOverlayPosition, TreeDecoration.IconOverlay | TreeDecoration.IconClassOverlay]))
             .forEach((overlay, position) => {
-                const overlayClass = (iconName: string) =>
-                    ['a', 'fa', `fa-${iconName}`, TreeDecoration.Styles.DECORATOR_SIZE_CLASS, TreeDecoration.IconOverlayPosition.getStyle(position)].join(' ');
+                const iconClasses = [TreeDecoration.Styles.DECORATOR_SIZE_CLASS, TreeDecoration.IconOverlayPosition.getStyle(position)];
                 const style = (color?: string) => color === undefined ? {} : { color };
                 if (overlay.background) {
-                    overlayIcons.push(<span key={node.id + 'bg'} className={overlayClass(overlay.background.shape)} style={style(overlay.background.color)}></span>);
+                    overlayIcons.push(<span key={node.id + 'bg'} className={this.getIconClass(overlay.background.shape, iconClasses)} style={style(overlay.background.color)}>
+                    </span>);
                 }
-                overlayIcons.push(<span key={node.id} className={overlayClass(overlay.icon)} style={style(overlay.color)}></span>);
+                const overlayIcon = (overlay as TreeDecoration.IconOverlay).icon || (overlay as TreeDecoration.IconClassOverlay).iconClass;
+                overlayIcons.push(<span key={node.id} className={this.getIconClass(overlayIcon, iconClasses)} style={style(overlay.color)}></span>);
             });
 
         if (overlayIcons.length > 0) {
@@ -531,19 +741,46 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return icon;
     }
 
+    /**
+     * Render the tree node tail decorations.
+     * @param node the tree node.
+     * @param props the node properties.
+     */
     protected renderTailDecorations(node: TreeNode, props: NodeProps): React.ReactNode {
-        const style = (fontData: TreeDecoration.FontData | undefined) => this.applyFontStyles({}, fontData);
         return <React.Fragment>
-            {this.getDecorationData(node, 'tailDecorations').filter(notEmpty).reduce((acc, current) => acc.concat(current), []).map(decoration => {
-                const { fontData, data, tooltip } = decoration;
+            {this.getDecorationData(node, 'tailDecorations').filter(notEmpty).reduce((acc, current) => acc.concat(current), []).map((decoration, index) => {
+                const { tooltip } = decoration;
+                const { data, fontData } = decoration as TreeDecoration.TailDecoration;
+                const color = (decoration as TreeDecoration.TailDecorationIcon).color;
+                const icon = (decoration as TreeDecoration.TailDecorationIcon).icon || (decoration as TreeDecoration.TailDecorationIconClass).iconClass;
                 const className = [TREE_NODE_SEGMENT_CLASS, TREE_NODE_TAIL_CLASS].join(' ');
-                return <div key={node.id + className} className={className} style={style(fontData)} title={tooltip}>
-                    {data}
+                const style = fontData ? this.applyFontStyles({}, fontData) : color ? { color } : undefined;
+                const content = data ? data : icon ? <span key={node.id + 'icon' + index} className={this.getIconClass(icon)}></span> : '';
+                return <div key={node.id + className + index} className={className} style={style} title={tooltip}>
+                    {content}
                 </div>;
             })}
         </React.Fragment>;
     }
 
+    /**
+     * Determine the classes to use for an icon
+     * - Assumes a Font Awesome name when passed a single string, otherwise uses the passed string array
+     * @param iconName the icon name or list of icon names.
+     * @param additionalClasses additional CSS classes.
+     *
+     * @returns the icon class name.
+     */
+    private getIconClass(iconName: string | string[], additionalClasses: string[] = []): string {
+        const iconClass = (typeof iconName === 'string') ? ['a', 'fa', `fa-${iconName}`] : ['a'].concat(iconName);
+        return iconClass.concat(additionalClasses).join(' ');
+    }
+
+    /**
+     * Render the node given the tree node and node properties.
+     * @param node the tree node.
+     * @param props the node properties.
+     */
     protected renderNode(node: TreeNode, props: NodeProps): React.ReactNode {
         if (!TreeNode.isVisible(node)) {
             return undefined;
@@ -560,6 +797,11 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return React.createElement('div', attributes, content);
     }
 
+    /**
+     * Create node attributes for the tree node given the node properties.
+     * @param node the tree node.
+     * @param props the node properties.
+     */
     protected createNodeAttributes(node: TreeNode, props: NodeProps): React.Attributes & React.HTMLAttributes<HTMLElement> {
         const className = this.createNodeClassNames(node, props).join(' ');
         const style = this.createNodeStyle(node, props);
@@ -572,6 +814,13 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         };
     }
 
+    /**
+     * Create the node class names.
+     * @param node the tree node.
+     * @param props the node properties.
+     *
+     * @returns the list of tree node class names.
+     */
     protected createNodeClassNames(node: TreeNode, props: NodeProps): string[] {
         const classNames = [TREE_NODE_CLASS];
         if (CompositeTreeNode.is(node)) {
@@ -589,18 +838,46 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return classNames;
     }
 
+    /**
+     * Get the default node style.
+     * @param node the tree node.
+     * @param props the node properties.
+     *
+     * @returns the CSS properties if available.
+     */
     protected getDefaultNodeStyle(node: TreeNode, props: NodeProps): React.CSSProperties | undefined {
-        // If the node is a composite, a toggle will be rendered. Otherwise we need to add the width and the left, right padding => 18px
-        const paddingLeft = `${props.depth * this.props.leftPadding + (this.isExpandable(node) ? 0 : 18)}px`;
-        return {
-            paddingLeft
-        };
+        const paddingLeft = this.getPaddingLeft(node, props) + 'px';
+        return { paddingLeft };
     }
 
+    protected getPaddingLeft(node: TreeNode, props: NodeProps): number {
+        return props.depth * this.props.leftPadding + (this.needsExpansionTogglePadding(node) ? this.props.expansionTogglePadding : 0);
+    }
+
+    /**
+     * If the node is a composite, a toggle will be rendered.
+     * Otherwise we need to add the width and the left, right padding => 18px
+     */
+    protected needsExpansionTogglePadding(node: TreeNode): boolean {
+        return !this.isExpandable(node);
+    }
+
+    /**
+     * Create the tree node style.
+     * @param node the tree node.
+     * @param props the node properties.
+     */
     protected createNodeStyle(node: TreeNode, props: NodeProps): React.CSSProperties | undefined {
         return this.decorateNodeStyle(node, this.getDefaultNodeStyle(node, props));
     }
 
+    /**
+     * Decorate the node style.
+     * @param node the tree node.
+     * @param style the optional CSS properties.
+     *
+     * @returns the CSS styles if available.
+     */
     protected decorateNodeStyle(node: TreeNode, style: React.CSSProperties | undefined): React.CSSProperties | undefined {
         const backgroundColor = this.getDecorationData(node, 'backgroundColor').filter(notEmpty).shift();
         if (backgroundColor) {
@@ -612,20 +889,72 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return style;
     }
 
+    /**
+     * Determine if the tree node is expandable.
+     * @param node the tree node.
+     *
+     * @returns `true` if the tree node is expandable.
+     */
     protected isExpandable(node: TreeNode): node is ExpandableTreeNode {
         return ExpandableTreeNode.is(node);
     }
 
+    /**
+     * Get the tree node decorations.
+     * @param node the tree node.
+     *
+     * @returns the list of tree decoration data.
+     */
     protected getDecorations(node: TreeNode): TreeDecoration.Data[] {
-        const decorations = this.decorations.get(node.id);
-        if (decorations) {
-            return decorations.sort(TreeDecoration.Data.comparePriority);
+        const decorations: TreeDecoration.Data[] = [];
+        if (DecoratedTreeNode.is(node)) {
+            decorations.push(node.decorationData);
         }
-        return [];
+        if (this.decorations.has(node.id)) {
+            decorations.push(...this.decorations.get(node.id));
+        }
+        return decorations.sort(TreeDecoration.Data.comparePriority);
     }
 
+    /**
+     * Get the tree decoration data for the given key.
+     * @param node the tree node.
+     * @param key the tree decoration data key.
+     *
+     * @returns the tree decoration data at the given key.
+     */
     protected getDecorationData<K extends keyof TreeDecoration.Data>(node: TreeNode, key: K): TreeDecoration.Data[K][] {
         return this.getDecorations(node).filter(data => data[key] !== undefined).map(data => data[key]).filter(notEmpty);
+    }
+
+    /**
+     * Store the last scroll state.
+     */
+    protected lastScrollState: {
+        /**
+         * The scroll top value.
+         */
+        scrollTop: number,
+        /**
+         * The scroll left value.
+         */
+        scrollLeft: number
+    } | undefined;
+
+    /**
+     * Get the scroll container.
+     */
+    protected getScrollContainer(): MaybePromise<HTMLElement> {
+        this.toDisposeOnDetach.push(Disposable.create(() => {
+            const { scrollTop, scrollLeft } = this.node;
+            this.lastScrollState = { scrollTop, scrollLeft };
+        }));
+        if (this.lastScrollState) {
+            const { scrollTop, scrollLeft } = this.lastScrollState;
+            this.node.scrollTop = scrollTop;
+            this.node.scrollLeft = scrollLeft;
+        }
+        return this.node;
     }
 
     protected onAfterAttach(msg: Message): void {
@@ -653,14 +982,20 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         this.addKeyListener(this.node, up, event => this.handleUp(event));
         this.addKeyListener(this.node, down, event => this.handleDown(event));
         this.addKeyListener(this.node, Key.ENTER, event => this.handleEnter(event));
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.addEventListener<any>(this.node, 'ps-scroll-y', (e: Event & { target: { scrollTop: number } }) => {
             if (this.view && this.view.list && this.view.list.Grid) {
                 const { scrollTop } = e.target;
                 this.view.list.Grid.handleScrollEvent({ scrollTop });
             }
         });
+        this.addEventListener(this.node, 'focus', () => this.doFocus());
     }
 
+    /**
+     * Handle the `left arrow` keyboard event.
+     * @param event the `left arrow` keyboard event.
+     */
     protected async handleLeft(event: KeyboardEvent): Promise<void> {
         if (!!this.props.multiSelect && (this.hasCtrlCmdMask(event) || this.hasShiftMask(event))) {
             return;
@@ -670,6 +1005,10 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         }
     }
 
+    /**
+     * Handle the `right arrow` keyboard event.
+     * @param event the `right arrow` keyboard event.
+     */
     protected async handleRight(event: KeyboardEvent): Promise<void> {
         if (!!this.props.multiSelect && (this.hasCtrlCmdMask(event) || this.hasShiftMask(event))) {
             return;
@@ -679,6 +1018,10 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         }
     }
 
+    /**
+     * Handle the `up arrow` keyboard event.
+     * @param event the `up arrow` keyboard event.
+     */
     protected handleUp(event: KeyboardEvent): void {
         if (!!this.props.multiSelect && this.hasShiftMask(event)) {
             this.model.selectPrevNode(TreeSelection.SelectionType.RANGE);
@@ -687,6 +1030,10 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         }
     }
 
+    /**
+     * Handle the `down arrow` keyboard event.
+     * @param event the `down arrow` keyboard event.
+     */
     protected handleDown(event: KeyboardEvent): void {
         if (!!this.props.multiSelect && this.hasShiftMask(event)) {
             this.model.selectNextNode(TreeSelection.SelectionType.RANGE);
@@ -695,10 +1042,20 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         }
     }
 
+    /**
+     * Handle the `enter key` keyboard event.
+     * - `enter` opens the tree node.
+     * @param event the `enter key` keyboard event.
+     */
     protected handleEnter(event: KeyboardEvent): void {
         this.model.openNode();
     }
 
+    /**
+     * Handle the single-click mouse event.
+     * @param node the tree node if available.
+     * @param event the mouse single-click event.
+     */
     protected handleClickEvent(node: TreeNode | undefined, event: React.MouseEvent<HTMLElement>): void {
         if (node) {
             if (!!this.props.multiSelect) {
@@ -728,11 +1085,22 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         }
     }
 
+    /**
+     * Handle the double-click mouse event.
+     * @param node the tree node if available.
+     * @param event the double-click mouse event.
+     */
     protected handleDblClickEvent(node: TreeNode | undefined, event: React.MouseEvent<HTMLElement>): void {
         this.model.openNode(node);
         event.stopPropagation();
     }
 
+    /**
+     * Handle the context menu click event.
+     * - The context menu click event is triggered by the right-click.
+     * @param node the tree node if available.
+     * @param event the right-click mouse event.
+     */
     protected handleContextMenuEvent(node: TreeNode | undefined, event: React.MouseEvent<HTMLElement>): void {
         if (SelectableTreeNode.is(node)) {
             // Keep the selection for the context menu, if the widget support multi-selection and the right click happens on an already selected node.
@@ -743,23 +1111,47 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
             const contextMenuPath = this.props.contextMenuPath;
             if (contextMenuPath) {
                 const { x, y } = event.nativeEvent;
+                const args = this.toContextMenuArgs(node);
                 this.onRender.push(Disposable.create(() =>
-                    setTimeout(() =>
-                        this.contextMenuRenderer.render(contextMenuPath, { x, y })
-                    )
+                    setTimeout(() => this.contextMenuRenderer.render({
+                        menuPath: contextMenuPath,
+                        anchor: { x, y },
+                        args
+                    }))
                 ));
             }
-            this.update();
+            this.doFocus();
         }
         event.stopPropagation();
         event.preventDefault();
     }
 
+    /**
+     * Convert the tree node to context menu arguments.
+     * @param node the selectable tree node.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    protected toContextMenuArgs(node: SelectableTreeNode): any[] | undefined {
+        return undefined;
+    }
+
+    /**
+     * Determine if the tree modifier aware event has a `ctrlcmd` mask.
+     * @param event the tree modifier aware event.
+     *
+     * @returns `true` if the tree modifier aware event contains the `ctrlcmd` mask.
+     */
     protected hasCtrlCmdMask(event: TreeWidget.ModifierAwareEvent): boolean {
         const { metaKey, ctrlKey } = event;
         return (isOSX && metaKey) || ctrlKey;
     }
 
+    /**
+     * Determine if the tree modifier aware event has a `shift` mask.
+     * @param event the tree modifier aware event.
+     *
+     * @returns `true` if the tree modifier aware event contains the `shift` mask.
+     */
     protected hasShiftMask(event: TreeWidget.ModifierAwareEvent): boolean {
         // Ctrl/Cmd mask overrules the Shift mask.
         if (this.hasCtrlCmdMask(event)) {
@@ -768,8 +1160,12 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return event.shiftKey;
     }
 
+    /**
+     * Deflate the tree node for storage.
+     * @param node the tree node.
+     */
     protected deflateForStorage(node: TreeNode): object {
-        // tslint:disable-next-line:no-any
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const copy = Object.assign({}, node) as any;
         if (copy.parent) {
             delete copy.parent;
@@ -780,6 +1176,9 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         if ('nextSibling' in copy) {
             delete copy.nextSibling;
         }
+        if ('busy' in copy) {
+            delete copy.busy;
+        }
         if (CompositeTreeNode.is(node)) {
             copy.children = [];
             for (const child of node.children) {
@@ -789,7 +1188,12 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return copy;
     }
 
-    // tslint:disable-next-line:no-any
+    /**
+     * Inflate the tree node from storage.
+     * @param node the tree node.
+     * @param parent the optional tree node.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     protected inflateFromStorage(node: any, parent?: TreeNode): TreeNode {
         if (node.selected) {
             node.selected = false;
@@ -805,6 +1209,9 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return node;
     }
 
+    /**
+     * Store the tree state.
+     */
     storeState(): object {
         const decorations = this.decoratorService.deflateDecorators(this.decorations);
         let state: object = {
@@ -813,40 +1220,91 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         if (this.model.root) {
             state = {
                 ...state,
-                root: this.deflateForStorage(this.model.root)
+                root: this.deflateForStorage(this.model.root),
+                model: this.model.storeState()
             };
         }
+
         return state;
     }
 
+    /**
+     * Restore the state.
+     * @param oldState the old state object.
+     */
     restoreState(oldState: object): void {
-        // tslint:disable-next-line:no-any
-        const { root, decorations } = (oldState as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { root, decorations, model } = (oldState as any);
         if (root) {
             this.model.root = this.inflateFromStorage(root);
         }
         if (decorations) {
             this.decorations = this.decoratorService.inflateDecorators(decorations);
         }
+        if (model) {
+            this.model.restoreState(model);
+        }
+    }
+
+    protected toNodeIcon(node: TreeNode): string {
+        return this.labelProvider.getIcon(node);
+    }
+
+    protected toNodeName(node: TreeNode): string {
+        return this.labelProvider.getName(node);
+    }
+
+    protected toNodeDescription(node: TreeNode): string {
+        return this.labelProvider.getLongName(node);
     }
 
 }
 export namespace TreeWidget {
+    /**
+     * Representation of the tree force update options.
+     */
     export interface ForceUpdateOptions {
+        /**
+         * Controls whether to force a resize of the widget.
+         */
         resize: boolean
     }
+    /**
+     * Representation of a tree node row.
+     */
     export interface NodeRow {
+        /**
+         * The node row index.
+         */
         index: number
+        /**
+         * The actual node.
+         */
         node: TreeNode
         /**
          * A root relative number representing the hierarchical depth of the actual node. Root is `0`, its children have `1` and so on.
          */
         depth: number
     }
+    /**
+     * Representation of the tree view properties.
+     */
     export interface ViewProps {
+        /**
+         * The width property.
+         */
         width: number
+        /**
+         * The height property.
+         */
         height: number
+        /**
+         * The scroll to row value.
+         */
         scrollToRow?: number
+        /**
+         * The list of node rows.
+         */
         rows: NodeRow[]
         handleScroll: (info: ScrollParams) => void
         renderNodeRow: (row: NodeRow) => React.ReactNode
@@ -884,6 +1342,6 @@ export namespace TreeWidget {
                 rowIndex={index}>
                 <div key={key} style={style}>{this.props.renderNodeRow(row)}</div>
             </CellMeasurer>;
-        }
+        };
     }
 }

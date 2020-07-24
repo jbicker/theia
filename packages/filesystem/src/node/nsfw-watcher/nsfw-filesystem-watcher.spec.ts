@@ -22,12 +22,12 @@ import URI from '@theia/core/lib/common/uri';
 import { FileUri } from '@theia/core/lib/node';
 import { NsfwFileSystemWatcherServer } from './nsfw-filesystem-watcher';
 import { DidFilesChangedParams } from '../../common/filesystem-watcher-protocol';
-// tslint:disable:no-unused-expression
+/* eslint-disable no-unused-expressions */
 
 const expect = chai.expect;
 const track = temp.track();
 
-describe('nsfw-filesystem-watcher', function () {
+describe('nsfw-filesystem-watcher', function (): void {
 
     let root: URI;
     let watcherServer: NsfwFileSystemWatcherServer;
@@ -39,6 +39,7 @@ describe('nsfw-filesystem-watcher', function () {
         root = FileUri.create(fs.realpathSync(temp.mkdirSync('node-fs-root')));
         watcherServer = createNsfwFileSystemWatcherServer();
         watcherId = await watcherServer.watchFileChanges(root.toString());
+        await sleep(2000);
     });
 
     afterEach(async () => {
@@ -46,7 +47,7 @@ describe('nsfw-filesystem-watcher', function () {
         watcherServer.dispose();
     });
 
-    it('Should receive file changes events from in the workspace by default.', async function () {
+    it('Should receive file changes events from in the workspace by default.', async function (): Promise<void> {
         if (process.platform === 'win32') {
             this.skip();
             return;
@@ -54,7 +55,7 @@ describe('nsfw-filesystem-watcher', function () {
         const actualUris = new Set<string>();
 
         const watcherClient = {
-            onDidFilesChanged(event: DidFilesChangedParams) {
+            onDidFilesChanged(event: DidFilesChangedParams): void {
                 event.changes.forEach(c => actualUris.add(c.uri.toString()));
             }
         };
@@ -81,7 +82,7 @@ describe('nsfw-filesystem-watcher', function () {
         assert.deepEqual(expectedUris, [...actualUris]);
     });
 
-    it('Should not receive file changes events from in the workspace by default if unwatched', async function () {
+    it('Should not receive file changes events from in the workspace by default if unwatched', async function (): Promise<void> {
         if (process.platform === 'win32') {
             this.skip();
             return;
@@ -89,7 +90,7 @@ describe('nsfw-filesystem-watcher', function () {
         const actualUris = new Set<string>();
 
         const watcherClient = {
-            onDidFilesChanged(event: DidFilesChangedParams) {
+            onDidFilesChanged(event: DidFilesChangedParams): void {
                 event.changes.forEach(c => actualUris.add(c.uri.toString()));
             }
         };
@@ -113,18 +114,19 @@ describe('nsfw-filesystem-watcher', function () {
         assert.deepEqual(0, actualUris.size);
     });
 
-    function createNsfwFileSystemWatcherServer() {
+    function createNsfwFileSystemWatcherServer(): NsfwFileSystemWatcherServer {
         return new NsfwFileSystemWatcherServer({
             verbose: true
         });
     }
 
-    function sleep(time: number) {
+    function sleep(time: number): Promise<unknown> {
         return new Promise(resolve => setTimeout(resolve, time));
     }
 
 });
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 process.on('unhandledRejection', (reason: any) => {
     console.error('Unhandled promise rejection: ' + reason);
 });

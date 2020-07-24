@@ -19,16 +19,21 @@
   */
 
 .dialogContent .theia-FileDialog,
-.dialogContent .theia-SaveFileDialog {
-    width: 500px;
-}
-
-.dialogContent .theia-FileDialog {
+.dialogContent .theia-SaveFileDialog,
+.dialogContent .theia-ResponsiveFileDialog {
     height: 500px;
+    width: 500px;
+    border: 1px solid var(--theia-editorWidget-border);
+    background: var(--theia-dropdown-background);
 }
 
-.dialogContent .theia-SaveFileDialog {
-    height: 450px;
+
+@media only screen and (max-height: 700px) {
+    .dialogContent .theia-FileDialog,
+    .dialogContent .theia-SaveFileDialog,
+    .dialogContent .theia-ResponsiveFileDialog {
+        height: 300px;
+    }
 }
 
 .dialogContent .theia-NavigationPanel,
@@ -41,7 +46,7 @@
 
 .dialogContent .theia-NavigationPanel,
 .dialogContent .theia-FiltersPanel {
-    height: 27px;
+    min-height: 27px;
 }
 
 .dialogContent .theia-FileNamePanel {
@@ -91,7 +96,6 @@
 .dialogContent .theia-LocationList {
     width: 427px;
     height: 21px;
-    background: var(--theia-layout-color2)!important;
 }
 
 /*
@@ -114,7 +118,6 @@
 .dialogContent .theia-FileTreeFiltersList {
     width: 427px;
     height: 21px;
-    background: var(--theia-layout-color2)!important;
 }
 
 /*

@@ -17,89 +17,152 @@
 import { injectable, inject, named } from 'inversify';
 import { ProcessManager } from './process-manager';
 import { ILogger } from '@theia/core/lib/common';
-import { Process, ProcessType, ProcessOptions } from './process';
-import { ChildProcess, spawn } from 'child_process';
+import { Process, ProcessType, ProcessOptions, ForkOptions, ProcessErrorEvent } from './process';
+import { ChildProcess, spawn, fork } from 'child_process';
 import * as stream from 'stream';
 
+// The class was here before, exporting to not break anything.
+export { DevNullStream } from './dev-null-stream';
+import { DevNullStream } from './dev-null-stream';
+
 export const RawProcessOptions = Symbol('RawProcessOptions');
+
+/**
+ * Options to spawn a new process (`spawn`).
+ *
+ * For more information please refer to the spawn function of Node's
+ * child_process module:
+ *
+ *   https://nodejs.org/api/child_process.html#child_process_child_process_spawn_command_args_options
+ */
 export interface RawProcessOptions extends ProcessOptions {
+}
+
+/**
+ * Options to fork a new process using the current Node interpreter (`fork`).
+ *
+ * For more information please refer to the fork function of Node's
+ * `child_process` module:
+ *
+ *   https://nodejs.org/api/child_process.html#child_process_child_process_fork_modulepath_args_options
+ */
+export interface RawForkOptions extends ForkOptions {
 }
 
 export const RawProcessFactory = Symbol('RawProcessFactory');
 export interface RawProcessFactory {
-    (options: RawProcessOptions): RawProcess;
-}
-
-/* A Node stream like /dev/null.
-
-   Writing goes to a black hole, reading returns EOF.  */
-class DevNullStream extends stream.Duplex {
-    // tslint:disable-next-line:no-any
-    _write(chunk: any, encoding: string, callback: (err?: Error) => void): void {
-        callback();
-    }
-
-    _read(size: number): void {
-        // tslint:disable-next-line:no-null-keyword
-        this.push(null);
-    }
+    (options: RawProcessOptions | RawForkOptions): RawProcess;
 }
 
 @injectable()
 export class RawProcess extends Process {
 
-    readonly input: stream.Writable;
-    readonly output: stream.Readable;
-    readonly errorOutput: stream.Readable;
-    readonly process: ChildProcess;
+    /**
+     * @deprecated use `inputStream` instead.
+     */
+    get input(): stream.Writable { return this.inputStream; }
 
-    constructor(
-        @inject(RawProcessOptions) options: RawProcessOptions,
+    /**
+     * @deprecated use `outputStream` instead.
+     */
+    get output(): stream.Readable { return this.outputStream; }
+
+    /**
+     * @deprecated use `errorStream` instead.
+     */
+    get errorOutput(): stream.Readable { return this.errorStream; }
+
+    /**
+     * If the process fails to launch, it will be undefined.
+     */
+    readonly process: ChildProcess | undefined;
+
+    readonly outputStream: stream.Readable;
+    readonly errorStream: stream.Readable;
+    readonly inputStream: stream.Writable;
+
+    constructor( // eslint-disable-next-line @typescript-eslint/indent
+        @inject(RawProcessOptions) options: RawProcessOptions | RawForkOptions,
         @inject(ProcessManager) processManager: ProcessManager,
         @inject(ILogger) @named('process') logger: ILogger
     ) {
         super(processManager, logger, ProcessType.Raw, options);
+        const executable = this.isForkOptions(options) ? options.modulePath : options.command;
 
-        this.logger.debug(`Starting raw process: ${options.command},`
+        this.logger.debug(`Starting raw process: ${executable},`
             + ` with args: ${options.args ? options.args.join(' ') : ''}, `
             + ` with options: ${JSON.stringify(options.options)}`);
 
-        /* spawn can throw exceptions, for example if the file is not
-           executable, it throws an error with EACCES.  Here, we try to
-           normalize the error handling by calling the error handler
-           instead.  */
+        // About catching errors: spawn will sometimes throw directly
+        // (EACCES on Linux), sometimes return a Process object with the pid
+        // property undefined (ENOENT on Linux) and then emit an 'error' event.
+        // For now, we try to normalize that into always emitting an 'error'
+        // event.
         try {
-            this.process = spawn(
-                options.command,
-                options.args,
-                options.options);
+            if (this.isForkOptions(options)) {
+                this.process = fork(
+                    options.modulePath,
+                    options.args || [],
+                    options.options || {});
+            } else {
+                this.process = spawn(
+                    options.command,
+                    options.args || [],
+                    options.options || {});
+            }
 
-            this.process.on('error', this.emitOnError.bind(this));
-            this.process.on('exit', this.emitOnExit.bind(this));
+            this.process.on('error', (error: NodeJS.ErrnoException) => {
+                error.code = error.code || 'Unknown error';
+                this.emitOnError(error as ProcessErrorEvent);
+            });
 
-            this.output = this.process.stdout;
-            this.input = this.process.stdin;
-            this.errorOutput = this.process.stderr;
+            // When no stdio option is passed, it is null by default.
+            this.outputStream = this.process.stdout || new DevNullStream({ autoDestroy: true });
+            this.inputStream = this.process.stdin || new DevNullStream({ autoDestroy: true });
+            this.errorStream = this.process.stderr || new DevNullStream({ autoDestroy: true });
+
+            this.process.on('exit', (exitCode, signal) => {
+                // node's child_process exit sets the unused parameter to null,
+                // but we want it to be undefined instead.
+                this.emitOnExit(
+                    typeof exitCode === 'number' ? exitCode : undefined,
+                    typeof signal === 'string' ? signal : undefined,
+                );
+            });
+
+            this.process.on('close', (exitCode, signal) => {
+                // node's child_process exit sets the unused parameter to null,
+                // but we want it to be undefined instead.
+                this.emitOnClose(
+                    typeof exitCode === 'number' ? exitCode : undefined,
+                    typeof signal === 'string' ? signal : undefined,
+                );
+            });
+
+            if (this.process.pid !== undefined) {
+                process.nextTick(this.emitOnStarted.bind(this));
+            }
         } catch (error) {
             /* When an error is thrown, set up some fake streams, so the client
                code doesn't break because these field are undefined.  */
-            this.output = new DevNullStream();
-            this.input = new DevNullStream();
-            this.errorOutput = new DevNullStream();
+            this.outputStream = new DevNullStream({ autoDestroy: true });
+            this.inputStream = new DevNullStream({ autoDestroy: true });
+            this.errorStream = new DevNullStream({ autoDestroy: true });
 
             /* Call the client error handler, but first give them a chance to register it.  */
-            process.nextTick(() => {
-                this.errorEmitter.fire(error);
-            });
+            this.emitOnErrorAsync(error);
         }
     }
 
-    get pid() {
+    get pid(): number {
+        if (!this.process) {
+            throw new Error('process did not start correctly');
+        }
         return this.process.pid;
     }
 
-    kill(signal?: string) {
-        if (this.killed === false) {
+    kill(signal?: string): void {
+        if (this.process && this.killed === false) {
             this.process.kill(signal);
         }
     }

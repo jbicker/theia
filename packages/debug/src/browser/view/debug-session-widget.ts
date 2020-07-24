@@ -15,20 +15,22 @@
  ********************************************************************************/
 
 import { inject, injectable, postConstruct, interfaces, Container } from 'inversify';
-import { BaseWidget, PanelLayout, Message, ApplicationShell, Widget } from '@theia/core/lib/browser';
-import { ViewContainer } from '@theia/core/lib/browser/view-container';
+import {
+    Message, ApplicationShell, Widget, BaseWidget, PanelLayout, StatefulWidget, ViewContainer
+} from '@theia/core/lib/browser';
 import { DebugThreadsWidget } from './debug-threads-widget';
 import { DebugStackFramesWidget } from './debug-stack-frames-widget';
 import { DebugBreakpointsWidget } from './debug-breakpoints-widget';
 import { DebugVariablesWidget } from './debug-variables-widget';
 import { DebugToolBar } from './debug-toolbar-widget';
 import { DebugViewModel, DebugViewOptions } from './debug-view-model';
+import { DebugWatchWidget } from './debug-watch-widget';
 
 export const DebugSessionWidgetFactory = Symbol('DebugSessionWidgetFactory');
 export type DebugSessionWidgetFactory = (options: DebugViewOptions) => DebugSessionWidget;
 
 @injectable()
-export class DebugSessionWidget extends BaseWidget implements ApplicationShell.TrackableWidgetProvider {
+export class DebugSessionWidget extends BaseWidget implements StatefulWidget, ApplicationShell.TrackableWidgetProvider {
 
     static createContainer(parent: interfaces.Container, options: DebugViewOptions): Container {
         const child = new Container({ defaultScope: 'Singleton' });
@@ -39,6 +41,7 @@ export class DebugSessionWidget extends BaseWidget implements ApplicationShell.T
         child.bind(DebugThreadsWidget).toDynamicValue(({ container }) => DebugThreadsWidget.createWidget(container));
         child.bind(DebugStackFramesWidget).toDynamicValue(({ container }) => DebugStackFramesWidget.createWidget(container));
         child.bind(DebugVariablesWidget).toDynamicValue(({ container }) => DebugVariablesWidget.createWidget(container));
+        child.bind(DebugWatchWidget).toDynamicValue(({ container }) => DebugWatchWidget.createWidget(container));
         child.bind(DebugBreakpointsWidget).toDynamicValue(({ container }) => DebugBreakpointsWidget.createWidget(container));
         child.bind(DebugSessionWidget).toSelf();
         return child;
@@ -46,6 +49,11 @@ export class DebugSessionWidget extends BaseWidget implements ApplicationShell.T
     static createWidget(parent: interfaces.Container, options: DebugViewOptions): DebugSessionWidget {
         return DebugSessionWidget.createContainer(parent, options).get(DebugSessionWidget);
     }
+
+    protected viewContainer: ViewContainer;
+
+    @inject(ViewContainer.Factory)
+    protected readonly viewContainerFactory: ViewContainer.Factory;
 
     @inject(DebugViewModel)
     readonly model: DebugViewModel;
@@ -57,10 +65,13 @@ export class DebugSessionWidget extends BaseWidget implements ApplicationShell.T
     protected readonly threads: DebugThreadsWidget;
 
     @inject(DebugStackFramesWidget)
-    protected readonly frames: DebugStackFramesWidget;
+    protected readonly stackFrames: DebugStackFramesWidget;
 
     @inject(DebugVariablesWidget)
     protected readonly variables: DebugVariablesWidget;
+
+    @inject(DebugWatchWidget)
+    protected readonly watch: DebugWatchWidget;
 
     @inject(DebugBreakpointsWidget)
     protected readonly breakpoints: DebugBreakpointsWidget;
@@ -69,34 +80,28 @@ export class DebugSessionWidget extends BaseWidget implements ApplicationShell.T
     protected init(): void {
         this.id = 'debug:session:' + this.model.id;
         this.title.label = this.model.label;
+        this.title.caption = this.model.label;
         this.title.closable = true;
-        this.title.iconClass = 'fa debug-tab-icon';
+        this.title.iconClass = 'debug-tab-icon';
         this.addClass('theia-session-container');
+
+        this.viewContainer = this.viewContainerFactory({
+            id: 'debug:view-container:' + this.model.id
+        });
+        this.viewContainer.addWidget(this.threads, { weight: 30 });
+        this.viewContainer.addWidget(this.stackFrames, { weight: 20 });
+        this.viewContainer.addWidget(this.variables, { weight: 10 });
+        this.viewContainer.addWidget(this.watch, { weight: 10 });
+        this.viewContainer.addWidget(this.breakpoints, { weight: 10 });
+
         this.toDispose.pushAll([
             this.toolbar,
-            this.threads,
-            this.frames,
-            this.variables,
-            this.breakpoints
+            this.viewContainer
         ]);
-
-        const container = new ViewContainer();
-
-        this.threads.scrollArea = container.node;
-        container.addWidget(this.threads);
-
-        this.frames.scrollArea = container.node;
-        container.addWidget(this.frames);
-
-        this.variables.scrollArea = container.node;
-        container.addWidget(this.variables);
-
-        this.breakpoints.scrollArea = container.node;
-        container.addWidget(this.breakpoints);
 
         const layout = this.layout = new PanelLayout();
         layout.addWidget(this.toolbar);
-        layout.addWidget(container);
+        layout.addWidget(this.viewContainer);
     }
 
     protected onActivateRequest(msg: Message): void {
@@ -105,12 +110,15 @@ export class DebugSessionWidget extends BaseWidget implements ApplicationShell.T
     }
 
     getTrackableWidgets(): Widget[] {
-        return [
-            this.threads,
-            this.frames,
-            this.variables,
-            this.breakpoints
-        ];
+        return this.viewContainer.getTrackableWidgets();
+    }
+
+    storeState(): object {
+        return this.viewContainer.storeState();
+    }
+
+    restoreState(oldState: ViewContainer.State): void {
+        this.viewContainer.restoreState(oldState);
     }
 
 }

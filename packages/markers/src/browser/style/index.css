@@ -16,15 +16,10 @@
 
 .theia-marker-container {
     font-size: var(--theia-ui-font-size1);
-    color: var(--theia-ui-font-color1);
 }
 
-.theia-marker-container .theia-ExpansionToggle {
-    min-width: 16px;
-}
-
-.theia-marker-container .noMarkers {
-    padding: 5px;
+.theia-side-panel .theia-marker-container .noMarkers {
+    padding-left: 19px;
 }
 
 .theia-marker-container .markerNode,
@@ -33,7 +28,8 @@
     align-items: center;
 }
 
-.theia-marker-container .markerNode {
+.theia-marker-container .markerNode,
+.theia-marker-container .markerFileNode {
     width: calc(100% - 32px);
 }
 
@@ -42,37 +38,40 @@
     margin-right: 5px;
 }
 
+.theia-marker-container .markerFileNode .name,
+.theia-marker-container .markerFileNode .path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .theia-marker-container .markerFileNode .path {
     font-size: var(--theia-ui-font-size0);
-    color: var(--theia-ui-font-color2);
+    color: var(--theia-descriptionForeground);
     align-self: flex-end;
     white-space: nowrap;
 }
 
 .theia-marker-container .error {
-    color: var(--theia-error-color0);
+    color: var(--theia-editorError-foreground);
 }
 
 .theia-marker-container .warning {
-    color: var(--theia-warn-color0);
+    color: var(--theia-editorWarning-foreground);
 }
 
 .theia-marker-container .information {
-    color: var(--theia-info-color0);
+    color: var(--theia-editorInfo-foreground);
 }
 
 .theia-marker-container .hint {
-    color: var(--theia-success-color0);
+    color: var(--theia-successBackground);
 }
 
 .theia-marker-container .markerNode .position,
-.theia-marker-container .markerNode .owner,
-.theia-marker-container .markerNode .code {
-    color: var(--theia-ui-font-color2);
-}
-
-.theia-marker-container .markerNode .position,
-.theia-marker-container .markerNode .code {
+.theia-marker-container .markerNode .owner {
+    color: var(--theia-descriptionForeground);
+    white-space: nowrap;
     margin-left: 5px;
 }
 
@@ -80,19 +79,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-.theia-marker-container .markerFileNode .counter {
-    background-color: var(--theia-ui-font-color2);
-    border-radius: 20px;
-    padding: 0 5px;
-    text-align: center;
-    font-size: calc(var(--theia-ui-font-size0) * 0.8);
-    color: var(--theia-inverse-ui-font-color0);
-    font-weight: 400;
-    min-width: 8px;
-    height: calc(var(--theia-private-horizontal-tab-height) * 0.8);
-    line-height: calc(var(--theia-private-horizontal-tab-height) * 0.8);
 }
 
 .problem-tab-icon::before {

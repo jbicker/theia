@@ -18,7 +18,7 @@ import { inject, injectable } from 'inversify';
 import { LoggerWatcher } from './logger-watcher';
 import { ILoggerServer, LogLevel, ConsoleLogger, rootLoggerName } from './logger-protocol';
 
-// tslint:disable:no-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 export {
     LogLevel, rootLoggerName
@@ -32,7 +32,7 @@ export let logger: ILogger;
  * Invoking has no side-effect if `setRootLogger` was not called before. Multiple function invocation has
  * no side-effect either.
  */
-export function unsetRootLogger() {
+export function unsetRootLogger(): void {
     if (logger !== undefined) {
         ConsoleLogger.reset();
         (<any>logger) = undefined;

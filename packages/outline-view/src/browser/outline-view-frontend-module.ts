@@ -24,10 +24,17 @@ import {
     TreeWidget,
     bindViewContribution,
     TreeProps,
-    defaultTreeProps
+    defaultTreeProps,
+    TreeDecoratorService,
+    TreeModel,
+    TreeModelImpl
 } from '@theia/core/lib/browser';
+import { TabBarToolbarContribution } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 import { OutlineViewWidgetFactory, OutlineViewWidget } from './outline-view-widget';
 import '../../src/browser/styles/index.css';
+import { bindContributionProvider } from '@theia/core/lib/common/contribution-provider';
+import { OutlineDecoratorService, OutlineTreeDecorator } from './outline-decorator-service';
+import { OutlineViewTreeModel } from './outline-view-tree';
 
 export default new ContainerModule(bind => {
     bind(OutlineViewWidgetFactory).toFactory(ctx =>
@@ -39,8 +46,18 @@ export default new ContainerModule(bind => {
 
     bindViewContribution(bind, OutlineViewContribution);
     bind(FrontendApplicationContribution).toService(OutlineViewContribution);
+    bind(TabBarToolbarContribution).toService(OutlineViewContribution);
 });
 
+/**
+ * Create an `OutlineViewWidget`.
+ * - The creation of the `OutlineViewWidget` includes:
+ *  - The creation of the tree widget itself with it's own customized props.
+ *  - The binding of necessary components into the container.
+ * @param parent the Inversify container.
+ *
+ * @returns the `OutlineViewWidget`.
+ */
 function createOutlineViewWidget(parent: interfaces.Container): OutlineViewWidget {
     const child = createTreeContainer(parent);
 
@@ -48,6 +65,14 @@ function createOutlineViewWidget(parent: interfaces.Container): OutlineViewWidge
 
     child.unbind(TreeWidget);
     child.bind(OutlineViewWidget).toSelf();
+
+    child.unbind(TreeModelImpl);
+    child.bind(OutlineViewTreeModel).toSelf();
+    child.rebind(TreeModel).toService(OutlineViewTreeModel);
+
+    child.bind(OutlineDecoratorService).toSelf().inSingletonScope();
+    child.rebind(TreeDecoratorService).toDynamicValue(ctx => ctx.container.get(OutlineDecoratorService)).inSingletonScope();
+    bindContributionProvider(child, OutlineTreeDecorator);
 
     return child.get(OutlineViewWidget);
 }

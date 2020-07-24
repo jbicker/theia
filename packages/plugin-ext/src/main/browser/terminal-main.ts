@@ -14,93 +14,147 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { TerminalOptions } from '@theia/plugin';
-import { TerminalServiceMain, TerminalServiceExt, MAIN_RPC_CONTEXT } from '../../api/plugin-api';
 import { interfaces } from 'inversify';
+import { ApplicationShell, WidgetOpenerOptions } from '@theia/core/lib/browser';
+import { TerminalOptions } from '@theia/plugin';
+import { TerminalWidget } from '@theia/terminal/lib/browser/base/terminal-widget';
 import { TerminalService } from '@theia/terminal/lib/browser/base/terminal-service';
-import { TerminalWidget, TerminalWidgetOptions } from '@theia/terminal/lib/browser/base/terminal-widget';
-import { RPCProtocol } from '../../api/rpc-protocol';
-import { ApplicationShell } from '@theia/core/lib/browser';
+import { TerminalServiceMain, TerminalServiceExt, MAIN_RPC_CONTEXT } from '../../common/plugin-api-rpc';
+import { RPCProtocol } from '../../common/rpc-protocol';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 
 /**
  * Plugin api service allows working with terminal emulator.
  */
-export class TerminalServiceMainImpl implements TerminalServiceMain {
+export class TerminalServiceMainImpl implements TerminalServiceMain, Disposable {
 
-    private readonly terminalService: TerminalService;
+    private readonly terminals: TerminalService;
     private readonly shell: ApplicationShell;
-    protected readonly terminals = new Map<number, TerminalWidget>();
     private readonly extProxy: TerminalServiceExt;
-    private terminalNumber = 0;
-    private readonly TERM_ID_PREFIX = 'plugin-terminal-';
+
+    private readonly toDispose = new DisposableCollection();
 
     constructor(rpc: RPCProtocol, container: interfaces.Container) {
-        this.terminalService = container.get(TerminalService);
+        this.terminals = container.get(TerminalService);
         this.shell = container.get(ApplicationShell);
         this.extProxy = rpc.getProxy(MAIN_RPC_CONTEXT.TERMINAL_EXT);
+        this.toDispose.push(this.terminals.onDidCreateTerminal(terminal => this.trackTerminal(terminal)));
+        for (const terminal of this.terminals.all) {
+            this.trackTerminal(terminal);
+        }
+        this.toDispose.push(this.terminals.onDidChangeCurrentTerminal(() => this.updateCurrentTerminal()));
+        this.updateCurrentTerminal();
     }
 
-    async $createTerminal(options: TerminalOptions): Promise<number> {
-        const counter = this.terminalNumber++;
-        const termWidgetOptions: TerminalWidgetOptions = {
-            title: options.name,
-            shellPath: options.shellPath,
-            shellArgs: options.shellArgs,
-            cwd: options.cwd,
-            env: options.env,
-            destroyTermOnClose: true,
-            useServerTitle: false,
-            id: this.TERM_ID_PREFIX + counter,
-            attributes: options.attributes
+    dispose(): void {
+        this.toDispose.dispose();
+    }
+
+    protected updateCurrentTerminal(): void {
+        const { currentTerminal } = this.terminals;
+        this.extProxy.$currentTerminalChanged(currentTerminal && currentTerminal.id);
+    }
+
+    protected async trackTerminal(terminal: TerminalWidget): Promise<void> {
+        let name = terminal.title.label;
+        this.extProxy.$terminalCreated(terminal.id, name);
+        const updateTitle = () => {
+            if (name !== terminal.title.label) {
+                name = terminal.title.label;
+                this.extProxy.$terminalNameChanged(terminal.id, name);
+            }
         };
-        let id: number;
+        terminal.title.changed.connect(updateTitle);
+        this.toDispose.push(Disposable.create(() => terminal.title.changed.disconnect(updateTitle)));
+
+        const updateProcessId = () => terminal.processId.then(
+            processId => this.extProxy.$terminalOpened(terminal.id, processId, terminal.dimensions.cols, terminal.dimensions.rows),
+            () => {/* no-op */ }
+        );
+        updateProcessId();
+        this.toDispose.push(terminal.onDidOpen(() => updateProcessId()));
+        this.toDispose.push(terminal.onTerminalDidClose(() => this.extProxy.$terminalClosed(terminal.id)));
+        this.toDispose.push(terminal.onSizeChanged(({ cols, rows }) => {
+            this.extProxy.$terminalSizeChanged(terminal.id, cols, rows);
+        }));
+        this.toDispose.push(terminal.onData(data => {
+            this.extProxy.$terminalOnInput(terminal.id, data);
+        }));
+    }
+
+    $write(id: string, data: string): void {
+        const terminal = this.terminals.getById(id);
+        if (!terminal) {
+            return;
+        }
+        terminal.write(data);
+    }
+
+    $resize(id: string, cols: number, rows: number): void {
+        const terminal = this.terminals.getById(id);
+        if (!terminal) {
+            return;
+        }
+        terminal.resize(cols, rows);
+    }
+
+    async $createTerminal(id: string, options: TerminalOptions, isPseudoTerminal?: boolean): Promise<string> {
         try {
-            const termWidget = await this.terminalService.newTerminal(termWidgetOptions);
-            id = await termWidget.start();
-            this.terminals.set(id, termWidget);
-            termWidget.onTerminalDidClose(() => {
-                this.extProxy.$terminalClosed(id);
+            const terminal = await this.terminals.newTerminal({
+                id,
+                title: options.name,
+                shellPath: options.shellPath,
+                shellArgs: options.shellArgs,
+                cwd: options.cwd,
+                env: options.env,
+                destroyTermOnClose: true,
+                useServerTitle: false,
+                attributes: options.attributes,
+                isPseudoTerminal,
             });
+            terminal.start();
+            return terminal.id;
         } catch (error) {
             throw new Error('Failed to create terminal. Cause: ' + error);
         }
-        return id;
     }
 
-    $sendText(id: number, text: string, addNewLine?: boolean): void {
-        const termWidget = this.terminals.get(id);
-        if (termWidget) {
+    $sendText(id: string, text: string, addNewLine?: boolean): void {
+        const terminal = this.terminals.getById(id);
+        if (terminal) {
             text = text.replace(/\r?\n/g, '\r');
             if (addNewLine && text.charAt(text.length - 1) !== '\r') {
                 text += '\r';
             }
-            termWidget.sendText(text);
+            terminal.sendText(text);
         }
     }
 
-    $show(id: number, preserveFocus?: boolean): void {
-        const termWidget = this.terminals.get(id);
-        if (termWidget) {
-            this.terminalService.activateTerminal(termWidget);
+    $show(id: string, preserveFocus?: boolean): void {
+        const terminal = this.terminals.getById(id);
+        if (terminal) {
+            const options: WidgetOpenerOptions = {};
+            if (preserveFocus) {
+                options.mode = 'reveal';
+            }
+            this.terminals.open(terminal, options);
         }
     }
 
-    $hide(id: number): void {
-        const termWidget = this.terminals.get(id);
-        if (termWidget) {
-            if (termWidget.isVisible) {
-                const area = this.shell.getAreaFor(termWidget);
-                if (area) {
-                    this.shell.collapsePanel(area);
-                }
+    $hide(id: string): void {
+        const terminal = this.terminals.getById(id);
+        if (terminal && terminal.isVisible) {
+            const area = this.shell.getAreaFor(terminal);
+            if (area) {
+                this.shell.collapsePanel(area);
             }
         }
     }
 
-    $dispose(id: number): void {
-        const termWidget = this.terminals.get(id);
-        if (termWidget) {
-            termWidget.dispose();
+    $dispose(id: string): void {
+        const terminal = this.terminals.getById(id);
+        if (terminal) {
+            terminal.dispose();
         }
     }
 }

@@ -21,7 +21,7 @@ import { BlameDecorator } from './blame-decorator';
 import { EditorManager, EditorKeybindingContexts, EditorWidget, EditorTextFocusContext, StrictEditorTextFocusContext } from '@theia/editor/lib/browser';
 import { BlameManager } from './blame-manager';
 import URI from '@theia/core/lib/common/uri';
-import { EDITOR_CONTEXT_MENU_GIT } from '../git-view-contribution';
+import { EDITOR_CONTEXT_MENU_SCM } from '@theia/scm-extra/lib/browser/scm-extra-contribution';
 
 import debounce = require('lodash.debounce');
 
@@ -104,7 +104,7 @@ export class BlameContribution implements CommandContribution, KeybindingContrib
 
     protected appliedDecorations = new Map<string, Disposable>();
 
-    protected async showBlame(editorWidget: EditorWidget) {
+    protected async showBlame(editorWidget: EditorWidget): Promise<void> {
         const uri = editorWidget.editor.uri.toString();
         if (this.appliedDecorations.get(uri)) {
             return;
@@ -127,7 +127,7 @@ export class BlameContribution implements CommandContribution, KeybindingContrib
         }
     }
 
-    protected clearBlame(uri: string | URI) {
+    protected clearBlame(uri: string | URI): void {
         const decorations = this.appliedDecorations.get(uri.toString());
         if (decorations) {
             this.appliedDecorations.delete(uri.toString());
@@ -136,7 +136,7 @@ export class BlameContribution implements CommandContribution, KeybindingContrib
     }
 
     registerMenus(menus: MenuModelRegistry): void {
-        menus.registerMenuAction(EDITOR_CONTEXT_MENU_GIT, {
+        menus.registerMenuAction(EDITOR_CONTEXT_MENU_SCM, {
             commandId: BlameCommands.TOGGLE_GIT_ANNOTATIONS.id,
         });
     }

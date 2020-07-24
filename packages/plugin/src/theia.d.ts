@@ -20,7 +20,7 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-
+import './theia-proposed';
 declare module '@theia/plugin' {
 
     /**
@@ -48,6 +48,14 @@ declare module '@theia/plugin' {
          * dispose all provided disposables.
          */
         static from(...disposableLikes: { dispose: () => any }[]): Disposable;
+
+        /**
+         * Creates a new Disposable calling the provided function
+         * on dispose.
+         * @param callOnDispose Function that disposes something.
+         */
+        constructor(callOnDispose: Function);
+
     }
 
     export type PluginType = 'frontend' | 'backend';
@@ -147,14 +155,20 @@ declare module '@theia/plugin' {
          * All plug-ins currently known to the system.
          */
         export let all: Plugin<any>[];
+
+        /**
+         * An event which fires when `plugins.all` changes. This can happen when extensions are
+         * installed, uninstalled, enabled or disabled.
+         */
+        export let onDidChange: Event<void>;
     }
 
     /**
-     * A command is a unique identifier of a function
-     * which can be executed by a user via a keyboard shortcut,
-     * a menu action or directly.
-     */
-    export interface Command {
+ * A command is a unique identifier of a function
+ * which can be executed by a user via a keyboard shortcut,
+ * a menu action or directly.
+ */
+    export interface CommandDescription {
         /**
          * A unique identifier of this command.
          */
@@ -164,18 +178,44 @@ declare module '@theia/plugin' {
          */
         label?: string;
         /**
-         * A tooltip for for command, when represented in the UI.
-         */
+          * A tooltip for for command, when represented in the UI.
+          */
         tooltip?: string;
         /**
          * An icon class of this command.
          */
         iconClass?: string;
+    }
+    /**
+     * Command represents a particular invocation of a registered command.
+     */
+    export interface Command {
+        /**
+         * The identifier of the actual command handler.
+         */
+        command?: string;
+        /**
+        * Title of the command invocation, like "Add local varible 'foo'".
+        */
+        title?: string;
+        /**
+          * A tooltip for for command, when represented in the UI.
+          */
+        tooltip?: string;
         /**
          * Arguments that the command handler should be
          * invoked with.
          */
         arguments?: any[];
+
+        /**
+         * @deprecated use command instead
+         */
+        id?: string;
+        /**
+         * @deprecated use title instead
+         */
+        label?: string;
     }
 
     /**
@@ -193,7 +233,7 @@ declare module '@theia/plugin' {
          */
         readonly character: number;
 
-        constructor(line: number, char: number);
+        constructor(line: number, character: number);
 
         /**
          * Check if this position is before `other`.
@@ -289,7 +329,7 @@ declare module '@theia/plugin' {
     }
 
     /**
-     * Pair if two positions.
+     * Pair of two positions.
      */
     export class Range {
         /**
@@ -325,11 +365,11 @@ declare module '@theia/plugin' {
          * Create a new position from coordinates.
          *
          * @param startLine a zero based line value
-         * @param startChar a zero based character value
+         * @param startCharacter a zero based character value
          * @param endLine a zero based line value
-         * @param endChar a zero based character value
+         * @param endCharacter a zero based character value
          */
-        constructor(startLine: number, startChar: number, endLine: number, endChar: number);
+        constructor(startLine: number, startCharacter: number, endLine: number, endCharacter: number);
 
         /**
          * Check if a position or a range is in this range.
@@ -405,11 +445,11 @@ declare module '@theia/plugin' {
          * Create a selection from coordinates.
          *
          * @param anchorLine a zero based line value
-         * @param anchorChar a zero based character value
+         * @param anchorCharacter a zero based character value
          * @param activeLine a zero based line value
-         * @param activeChar a zero based character value
+         * @param activeCharacter a zero based character value
          */
-        constructor(anchorLine: number, anchorChar: number, activeLine: number, activeChar: number);
+        constructor(anchorLine: number, anchorCharacter: number, activeLine: number, activeCharacter: number);
     }
 
     /**
@@ -610,6 +650,60 @@ declare module '@theia/plugin' {
          * signaled by returning `undefined` or `null`.
          */
         provideDefinition(document: TextDocument, position: Position, token: CancellationToken | undefined): ProviderResult<Definition | DefinitionLink[]>;
+    }
+
+    /**
+     * The declaration provider interface defines the contract between extensions and
+     * the [go to declaration](https://code.visualstudio.com/api/references/vscode-api#DeclarationProvider)
+     * feature.
+     */
+    export interface DeclarationProvider {
+        /**
+         * Provide the declaration of the symbol at the given position and document.
+         *
+         * @param document The document in which the command was invoked.
+         * @param position The position at which the command was invoked.
+         * @param token A cancellation token.
+         * @return A declaration or a thenable that resolves to such. The lack of a result can be
+         * signaled by returning `undefined` or `null`.
+         */
+        provideDeclaration(document: TextDocument, position: Position, token: CancellationToken | undefined): ProviderResult<Definition | DefinitionLink[]>;
+    }
+
+    /**
+     * The implementation provider interface defines the contract between extensions and
+     * the go to implementation feature.
+     */
+    export interface ImplementationProvider {
+
+        /**
+         * Provide the implementations of the symbol at the given position and document.
+         *
+         * @param document The document in which the command was invoked.
+         * @param position The position at which the command was invoked.
+         * @param token A cancellation token.
+         * @return A definition or a thenable that resolves to such. The lack of a result can be
+         * signaled by returning `undefined` or `null`.
+         */
+        provideImplementation(document: TextDocument, position: Position, token: CancellationToken): ProviderResult<Definition | DefinitionLink[]>;
+    }
+
+    /**
+     * The type definition provider defines the contract between extensions and
+     * the go to type definition feature.
+     */
+    export interface TypeDefinitionProvider {
+
+        /**
+         * Provide the type definition of the symbol at the given position and document.
+         *
+         * @param document The document in which the command was invoked.
+         * @param position The position at which the command was invoked.
+         * @param token A cancellation token.
+         * @return A definition or a thenable that resolves to such. The lack of a result can be
+         * signaled by returning `undefined` or `null`.
+         */
+        provideTypeDefinition(document: TextDocument, position: Position, token: CancellationToken): ProviderResult<Definition | DefinitionLink[]>;
     }
 
     /**
@@ -1030,7 +1124,7 @@ declare module '@theia/plugin' {
          * @param options The undo/redo behavior around this edit. By default, undo stops will be created before and after this edit.
          * @return A promise that resolves with a value indicating if the edits could be applied.
          */
-        edit(callback: (editBuilder: TextEditorEdit) => void, options?: { undoStopBefore: boolean; undoStopAfter: boolean; }): Promise<boolean>;
+        edit(callback: (editBuilder: TextEditorEdit) => void, options?: { undoStopBefore: boolean; undoStopAfter: boolean; }): PromiseLike<boolean>;
 
         /**
          * Insert a [snippet](#SnippetString) and put the editor into snippet mode. "Snippet mode"
@@ -1043,7 +1137,7 @@ declare module '@theia/plugin' {
          * @return A promise that resolves with a value indicating if the snippet could be inserted. Note that the promise does not signal
          * that the snippet is completely filled-in or accepted.
          */
-        insertSnippet(snippet: SnippetString, location?: Position | Range | Position[] | Range[], options?: { undoStopBefore: boolean; undoStopAfter: boolean; }): Promise<boolean>;
+        insertSnippet(snippet: SnippetString, location?: Position | Range | Position[] | Range[], options?: { undoStopBefore: boolean; undoStopAfter: boolean; }): PromiseLike<boolean>;
 
         /**
          * Adds a set of decorations to the text editor. If a set of decorations already exists with
@@ -1595,14 +1689,59 @@ declare module '@theia/plugin' {
     }
 
     /**
-     * Denotes a column in the editor window.
-     * Columns are used to show editors side by side.
+     * Denotes a location of an editor in the window. Editors can be arranged in a grid
+     * and each column represents one editor location in that grid by counting the editors
+     * in order of their appearance.
      */
     export enum ViewColumn {
+        /**
+         * A *symbolic* editor column representing the currently active column. This value
+         * can be used when opening editors, but the *resolved* [viewColumn](#TextEditor.viewColumn)-value
+         * of editors will always be `One`, `Two`, `Three`,... or `undefined` but never `Active`.
+         */
         Active = -1,
+        /**
+         * A *symbolic* editor column representing the column to the side of the active one. This value
+         * can be used when opening editors, but the *resolved* [viewColumn](#TextEditor.viewColumn)-value
+         * of editors will always be `One`, `Two`, `Three`,... or `undefined` but never `Beside`.
+         */
+        Beside = -2,
+        /**
+         * The first editor column.
+         */
         One = 1,
+        /**
+         * The second editor column.
+         */
         Two = 2,
-        Three = 3
+        /**
+         * The third editor column.
+         */
+        Three = 3,
+        /**
+         * The fourth editor column.
+         */
+        Four = 4,
+        /**
+         * The fifth editor column.
+         */
+        Five = 5,
+        /**
+         * The sixth editor column.
+         */
+        Six = 6,
+        /**
+         * The seventh editor column.
+         */
+        Seven = 7,
+        /**
+         * The eighth editor column.
+         */
+        Eight = 8,
+        /**
+         * The ninth editor column.
+         */
+        Nine = 9
     }
 
     /**
@@ -1685,6 +1824,29 @@ declare module '@theia/plugin' {
     }
 
     /**
+     * A cancellation token used to request cancellation on long running
+     * or asynchronous task.
+     */
+    export interface CancellationToken {
+        readonly isCancellationRequested: boolean;
+        /*
+         * An event emitted when cancellation is requested
+         * @event
+         */
+        readonly onCancellationRequested: Event<any>;
+
+    }
+
+    /**
+     * A cancellation token source create and manage a [cancellation token](#CancellationToken)
+     */
+    export class CancellationTokenSource {
+        token: CancellationToken;
+        cancel(): void;
+        dispose(): void;
+    }
+
+    /**
      * A text document content provider allows to add readonly documents
      * to the editor, such as source from a dll or generated html from md.
      *
@@ -1715,56 +1877,93 @@ declare module '@theia/plugin' {
     }
 
     /**
-     * A cancellation token used to request cancellation on long running
-     * or asynchronous task.
+     * A light-weight user input UI that is initially not visible. After
+     * configuring it through its properties the extension can make it
+     * visible by calling [QuickInput.show](#QuickInput.show).
+     *
+     * There are several reasons why this UI might have to be hidden and
+     * the extension will be notified through [QuickInput.onDidHide](#QuickInput.onDidHide).
+     * (Examples include: an explicit call to [QuickInput.hide](#QuickInput.hide),
+     * the user pressing Esc, some other input UI opening, etc.)
+     *
+     * A user pressing Enter or some other gesture implying acceptance
+     * of the current state does not automatically hide this UI component.
+     * It is up to the extension to decide whether to accept the user's input
+     * and if the UI should indeed be hidden through a call to [QuickInput.hide](#QuickInput.hide).
+     *
+     * When the extension no longer needs this input UI, it should
+     * [QuickInput.dispose](#QuickInput.dispose) it to allow for freeing up
+     * any resources associated with it.
+     *
+     * See [QuickPick](#QuickPick) and [InputBox](#InputBox) for concrete UIs.
      */
-    export interface CancellationToken {
-        readonly isCancellationRequested: boolean;
-        /*
-         * An event emitted when cancellation is requested
-         * @event
+    export interface QuickInput {
+
+        /**
+         * An optional title.
          */
-        readonly onCancellationRequested: Event<any>;
+        title: string | undefined;
 
-    }
+        /**
+         * An optional current step count.
+         */
+        step: number | undefined;
 
-    /**
-     * A cancellation token source create and manage a [cancellation token](#CancellationToken)
-     */
-    export class CancellationTokenSource {
-        token: CancellationToken;
-        cancel(): void;
+        /**
+         * An optional total step count.
+         */
+        totalSteps: number | undefined;
+
+        /**
+         * If the UI should allow for user input. Defaults to true.
+         *
+         * Change this to false, e.g., while validating user input or
+         * loading data for the next step in user input.
+         */
+        enabled: boolean;
+
+        /**
+         * If the UI should show a progress indicator. Defaults to false.
+         *
+         * Change this to true, e.g., while loading more data or validating
+         * user input.
+         */
+        busy: boolean;
+
+        /**
+         * If the UI should stay open even when loosing UI focus. Defaults to false.
+         */
+        ignoreFocusOut: boolean;
+
+        /**
+         * Makes the input UI visible in its current configuration. Any other input
+         * UI will first fire an [QuickInput.onDidHide](#QuickInput.onDidHide) event.
+         */
+        show(): void;
+
+        /**
+         * Hides this input UI. This will also fire an [QuickInput.onDidHide](#QuickInput.onDidHide)
+         * event.
+         */
+        hide(): void;
+
+        /**
+         * An event signaling when this input UI is hidden.
+         *
+         * There are several reasons why this UI might have to be hidden and
+         * the extension will be notified through [QuickInput.onDidHide](#QuickInput.onDidHide).
+         * (Examples include: an explicit call to [QuickInput.hide](#QuickInput.hide),
+         * the user pressing Esc, some other input UI opening, etc.)
+         */
+        onDidHide: Event<void>;
+
+        /**
+         * Dispose of this input UI and any associated resources. If it is still
+         * visible, it is first hidden. After this call the input UI is no longer
+         * functional and no additional methods or properties on it should be
+         * accessed. Instead a new input UI should be created.
+         */
         dispose(): void;
-    }
-
-	/**
-	 * A text document content provider allows to add readonly documents
-	 * to the editor, such as source from a dll or generated html from md.
-	 *
-	 * Content providers are [registered](#workspace.registerTextDocumentContentProvider)
-	 * for a [uri-scheme](#Uri.scheme). When a uri with that scheme is to
-	 * be [loaded](#workspace.openTextDocument) the content provider is
-	 * asked.
-	 */
-    export interface TextDocumentContentProvider {
-
-		/**
-		 * An event to signal a resource has changed.
-		 */
-        onDidChange?: Event<Uri>;
-
-		/**
-		 * Provide textual content for a given uri.
-		 *
-		 * The editor will use the returned string-content to create a readonly
-		 * [document](#TextDocument). Resources allocated should be released when
-		 * the corresponding document has been [closed](#workspace.onDidCloseTextDocument).
-		 *
-		 * @param uri An uri which scheme matches the scheme this provider was [registered](#workspace.registerTextDocumentContentProvider) for.
-		 * @param token A cancellation token.
-		 * @return A string or a thenable that resolves to such.
-		 */
-        provideTextDocumentContent(uri: Uri, token: CancellationToken): ProviderResult<string>;
     }
 
     /**
@@ -1792,6 +1991,115 @@ declare module '@theia/plugin' {
          * not implemented yet
          */
         picked?: boolean;
+
+        /**
+         * Used to display the group label in the right corner of item
+         */
+        groupLabel?: string;
+
+        /**
+         * Used to display border after item
+         */
+        showBorder?: boolean;
+    }
+
+    /**
+     * Button for an action in a [QuickPick](#QuickPick) or [InputBox](#InputBox).
+     */
+    export interface QuickInputButton {
+
+        /**
+         * Icon for the button.
+         */
+        readonly iconPath: Uri | { light: Uri; dark: Uri } | ThemeIcon;
+
+        /**
+         * An optional tooltip.
+         */
+        readonly tooltip?: string | undefined;
+    }
+
+    /**
+     * A concrete [QuickInput](#QuickInput) to let the user pick an item from a
+     * list of items of type T. The items can be filtered through a filter text field and
+     * there is an option [canSelectMany](#QuickPick.canSelectMany) to allow for
+     * selecting multiple items.
+     *
+     * Note that in many cases the more convenient [window.showQuickPick](#window.showQuickPick)
+     * is easier to use. [window.createQuickPick](#window.createQuickPick) should be used
+     * when [window.showQuickPick](#window.showQuickPick) does not offer the required flexibility.
+     */
+    export interface QuickPick<T extends QuickPickItem> extends QuickInput {
+
+        /**
+         * Current value of the filter text.
+         */
+        value: string;
+
+        /**
+         * Optional placeholder in the filter text.
+         */
+        placeholder: string | undefined;
+
+        /**
+         * An event signaling when the value of the filter text has changed.
+         */
+        readonly onDidChangeValue: Event<string>;
+
+        /**
+         * An event signaling when the user indicated acceptance of the selected item(s).
+         */
+        readonly onDidAccept: Event<void>;
+
+        /**
+         * Buttons for actions in the UI.
+         */
+        buttons: ReadonlyArray<QuickInputButton>;
+
+        /**
+         * An event signaling when a button was triggered.
+         */
+        readonly onDidTriggerButton: Event<QuickInputButton>;
+
+        /**
+         * Items to pick from.
+         */
+        items: ReadonlyArray<T>;
+
+        /**
+         * If multiple items can be selected at the same time. Defaults to false.
+         */
+        canSelectMany: boolean;
+
+        /**
+         * If the filter text should also be matched against the description of the items. Defaults to false.
+         */
+        matchOnDescription: boolean;
+
+        /**
+         * If the filter text should also be matched against the detail of the items. Defaults to false.
+         */
+        matchOnDetail: boolean;
+
+        /**
+         * Active items. This can be read and updated by the extension.
+         */
+        activeItems: ReadonlyArray<T>;
+
+        /**
+         * An event signaling when the active items have changed.
+         */
+        readonly onDidChangeActive: Event<T[]>;
+
+        /**
+         * Selected items. This can be read and updated by the extension.
+         */
+        selectedItems: ReadonlyArray<T>;
+
+        /**
+         * An event signaling when the selected items have changed.
+         */
+        readonly onDidChangeSelection: Event<T[]>;
     }
 
     /**
@@ -1801,12 +2109,12 @@ declare module '@theia/plugin' {
         /**
          * A flag to include the description when filtering
          */
-        machOnDescription?: boolean;
+        matchOnDescription?: boolean;
 
         /**
          *  A flag to include the detail when filtering
          */
-        machOnDetail?: boolean;
+        matchOnDetail?: boolean;
 
         /**
          * The place holder in input box
@@ -1893,6 +2201,11 @@ declare module '@theia/plugin' {
          * Return `undefined`, or the empty string when 'value' is valid.
          */
         validateInput?(value: string): string | undefined | PromiseLike<string | undefined>;
+
+        /**
+         * An optional function that will be called on Enter key.
+         */
+        onAccept?(): void;
     }
 
     /**
@@ -1926,23 +2239,33 @@ declare module '@theia/plugin' {
          *
          * Throw if a command is already registered for the given command identifier.
          */
-        export function registerCommand(command: Command, handler?: (...args: any[]) => any): Disposable;
+        export function registerCommand(command: CommandDescription | string, handler?: (...args: any[]) => any, thisArg?: any): Disposable;
 
         /**
          * Register the given handler for the given command identifier.
          *
          * @param commandId a given command id
          * @param handler a command handler
+         *
+         * Throw if a handler for the given command identifier is already registered.
          */
-        export function registerHandler(commandId: string, handler: (...args: any[]) => any): Disposable;
+        export function registerHandler(commandId: string, handler: (...args: any[]) => any, thisArg?: any): Disposable;
 
         /**
-         * Register a text editor command which can execute only if active editor present and command has access to the active editor
+         * Registers a text editor command that can be invoked via a keyboard shortcut,
+         * a menu item, an action, or directly.
          *
-         * @param command a command description
-         * @param handler a command handler with access to text editor
+         * Text editor commands are different from ordinary [commands](#commands.registerCommand) as
+         * they only execute when there is an active editor when the command is called. Also, the
+         * command handler of an editor command has access to the active editor and to an
+         * [edit](#TextEditorEdit)-builder.
+         *
+         * @param command A unique identifier for the command.
+         * @param callback A command handler function with access to an [editor](#TextEditor) and an [edit](#TextEditorEdit).
+         * @param thisArg The `this` context used when invoking the handler function.
+         * @return Disposable which unregisters this command on disposal.
          */
-        export function registerTextEditorCommand(command: Command, handler: (textEditor: TextEditor, edit: TextEditorEdit, ...arg: any[]) => void): Disposable;
+        export function registerTextEditorCommand(command: string, callback: (textEditor: TextEditor, edit: TextEditorEdit, ...args: any[]) => void, thisArg?: any): Disposable;
 
         /**
          * Execute the active handler for the given command and arguments.
@@ -1950,6 +2273,15 @@ declare module '@theia/plugin' {
          * Reject if a command cannot be executed.
          */
         export function executeCommand<T>(commandId: string, ...args: any[]): PromiseLike<T | undefined>;
+
+        /**
+         * Retrieve the list of all available commands. Commands starting an underscore are
+         * treated as internal commands.
+         *
+         * @param filterInternal Set `true` to not see internal commands (starting with an underscore)
+         * @return Thenable that resolves to a list of command ids.
+         */
+        export function getCommands(filterInternal?: boolean): PromiseLike<string[]>;
     }
 
     /**
@@ -2017,7 +2349,7 @@ declare module '@theia/plugin' {
 
         /**
          * The text to show for the entry. To set a text with icon use the following pattern in text string:
-         * $(fontawesomeClasssName)
+         * $(fontawesomeClassName)
          */
         text: string;
 
@@ -2214,6 +2546,17 @@ declare module '@theia/plugin' {
     }
 
     /**
+     * Options to configure the behaviour of a file upload dialog.
+     */
+    export interface UploadDialogOptions {
+
+        /**
+         * The resource, where files should be uploaded.
+         */
+        defaultUri?: Uri;
+    }
+
+    /**
      * Definition of the terminal emulator.
      */
     export interface Terminal {
@@ -2287,6 +2630,83 @@ declare module '@theia/plugin' {
     }
 
     /**
+     *  The dimensions of a terminal.
+     */
+    export interface TerminalDimensions {
+        /**
+         * The number of columns of the terminal.
+         */
+        readonly columns: number;
+
+        /**
+         * The number of rows of the terminal.
+         */
+        readonly rows: number;
+    }
+
+    /**
+     * Options a virtual process terminal.
+     */
+    export interface PseudoTerminalOptions {
+        /**
+         * The name of the terminal.
+         */
+        name: string;
+
+        /**
+         * An implementation of [Pseudoterminal](#Pseudoterminal) where an extension can
+         * control it.
+         */
+        pty: Pseudoterminal;
+    }
+
+    /**
+     * Defines the interface of a terminal pty, enabling extensions to control a terminal.
+     */
+    interface Pseudoterminal {
+        /**
+         * An event that when fired will write data to the terminal.
+         */
+        onDidWrite: Event<string>;
+
+        /**
+         * An event that when fired allows resizing the terminal.
+         */
+        onDidOverrideDimensions?: Event<TerminalDimensions | undefined>;
+
+        /**
+         * An event that when fired will close the pty.
+         */
+        onDidClose?: Event<void | number>;
+
+        /**
+         * Implement to handle when the pty is opened.
+         *
+         * @param dimensions The dimensions of the terminal.
+         */
+        open(dimensions: TerminalDimensions | undefined): void;
+
+        /**
+         * Implement to handle when the terminal is closed.
+         */
+        close(): void;
+
+        /**
+         * Implement to handle inputing data in the terminal.
+         *
+         * @param data The inputing data.
+         */
+        handleInput?(data: string): void;
+
+        /**
+         * Implement to handle when the number of rows and columns changes.
+         *
+         * @param dimensions The new dimensions.
+         */
+        setDimensions?(dimensions: TerminalDimensions): void;
+    }
+
+    /**
      * A plug-in context is a collection of utilities private to a
      * plug-in.
      *
@@ -2302,6 +2722,18 @@ declare module '@theia/plugin' {
         subscriptions: { dispose(): any }[];
 
         /**
+         * A memento object that stores state in the context
+         * of the currently opened [workspace](#workspace.workspaceFolders).
+         */
+        workspaceState: Memento;
+
+        /**
+         * A memento object that stores state independent
+         * of the current opened [workspace](#workspace.workspaceFolders).
+         */
+        globalState: Memento;
+
+        /**
          * The absolute file path of the directory containing the extension.
          */
         extensionPath: string;
@@ -2313,12 +2745,452 @@ declare module '@theia/plugin' {
          * @return The absolute path of the resource.
          */
         asAbsolutePath(relativePath: string): string;
+
+        /**
+        * An absolute file path of a workspace specific directory in which the extension
+        * can store private state. The directory might not exist on disk and creation is
+        * up to the extension. However, the parent directory is guaranteed to be existent.
+        *
+        * Use [`workspaceState`](#ExtensionContext.workspaceState) or
+        * [`globalState`](#ExtensionContext.globalState) to store key value data.
+        */
+        storagePath: string | undefined;
+
+        /**
+         * An absolute file path in which the extension can store global state.
+         * The directory might not exist on disk and creation is
+         * up to the extension. However, the parent directory is guaranteed to be existent.
+         *
+         * Use [`globalState`](#ExtensionContext.globalState) to store key value data.
+         */
+        readonly globalStoragePath: string;
+
+        /**
+         * An absolute file path of a directory in which the extension can create log files.
+         * The directory might not exist on disk and creation is up to the extension. However,
+         * the parent directory is guaranteed to be existent.
+         */
+        readonly logPath: string;
+    }
+
+    /**
+     * A memento represents a storage utility. It can store and retrieve
+     * values.
+     */
+    export interface Memento {
+
+        /**
+         * Return a value.
+         *
+         * @param key A string.
+         * @return The stored value or `undefined`.
+         */
+        get<T>(key: string): T | undefined;
+
+        /**
+         * Return a value.
+         *
+         * @param key A string.
+         * @param defaultValue A value that should be returned when there is no
+         * value (`undefined`) with the given key.
+         * @return The stored value or the defaultValue.
+         */
+        get<T>(key: string, defaultValue: T): T;
+
+        /**
+         * Store a value. The value must be JSON-stringifyable.
+         *
+         * @param key A string.
+         * @param value A value. MUST not contain cyclic references.
+         */
+        update(key: string, value: any): PromiseLike<void>;
+    }
+
+    /**
+     * Defines a port mapping used for localhost inside the webview.
+     */
+    export interface WebviewPortMapping {
+        /**
+         * Localhost port to remap inside the webview.
+         */
+        readonly webviewPort: number;
+
+        /**
+         * Destination port. The `webviewPort` is resolved to this port.
+         */
+        readonly extensionHostPort: number;
+    }
+
+    /**
+     * Content settings for a webview.
+     */
+    export interface WebviewOptions {
+        /**
+         * Controls whether scripts are enabled in the webview content or not.
+         *
+         * Defaults to false (scripts-disabled).
+         */
+        readonly enableScripts?: boolean;
+
+        /**
+         * Controls whether command uris are enabled in webview content or not.
+         *
+         * Defaults to false.
+         */
+        readonly enableCommandUris?: boolean;
+
+        /**
+         * Root paths from which the webview can load local (filesystem) resources using the `theia-resource:` scheme.
+         *
+         * Default to the root folders of the current workspace plus the extension's install directory.
+         *
+         * Pass in an empty array to disallow access to any local resources.
+         */
+        readonly localResourceRoots?: ReadonlyArray<Uri>;
+
+        /**
+         * Mappings of localhost ports used inside the webview.
+         *
+         * Port mapping allow webviews to transparently define how localhost ports are resolved. This can be used
+         * to allow using a static localhost port inside the webview that is resolved to random port that a service is
+         * running on.
+         *
+         * If a webview accesses localhost content, we recommend that you specify port mappings even if
+         * the `webviewPort` and `extensionHostPort` ports are the same.
+         *
+         * *Note* that port mappings only work for `http` or `https` urls. Websocket urls (e.g. `ws://localhost:3000`)
+         * cannot be mapped to another port.
+         */
+        readonly portMapping?: ReadonlyArray<WebviewPortMapping>;
+    }
+
+    /**
+     * A webview displays html content, like an iframe.
+     */
+    export interface Webview {
+        /**
+         * Content settings for the webview.
+         */
+        options: WebviewOptions;
+
+        /**
+         * Contents of the webview.
+         *
+         * Should be a complete html document.
+         */
+        html: string;
+
+        /**
+         * Fired when the webview content posts a message.
+         */
+        readonly onDidReceiveMessage: Event<any>;
+
+        /**
+         * Post a message to the webview content.
+         *
+         * Messages are only delivered if the webview is visible.
+         *
+         * @param message Body of the message.
+         */
+        postMessage(message: any): PromiseLike<boolean>;
+
+        /**
+         * Convert a uri for the local file system to one that can be used inside webviews.
+         *
+         * Webviews cannot directly load resources from the workspace or local file system using `file:` uris. The
+         * `asWebviewUri` function takes a local `file:` uri and converts it into a uri that can be used inside of
+         * a webview to load the same resource:
+         *
+         * ```ts
+         * webview.html = `<img src="${webview.asWebviewUri(vscode.Uri.file('/Users/codey/workspace/cat.gif'))}">`
+         * ```
+         */
+        asWebviewUri(localResource: Uri): Uri;
+
+        /**
+         * Content security policy source for webview resources.
+         *
+         * This is the origin that should be used in a content security policy rule:
+         *
+         * ```
+         * img-src https: ${webview.cspSource} ...;
+         * ```
+         */
+        readonly cspSource: string;
+    }
+
+    /**
+     * Content settings for a webview panel.
+     */
+    export interface WebviewPanelOptions {
+        /**
+         * Controls if the find widget is enabled in the panel.
+         *
+         * Defaults to false.
+         */
+        readonly enableFindWidget?: boolean;
+
+        /**
+         * Controls if the webview panel's content (iframe) is kept around even when the panel
+         * is no longer visible.
+         *
+         * Normally the webview panel's html context is created when the panel becomes visible
+         * and destroyed when it is is hidden. Extensions that have complex state
+         * or UI can set the `retainContextWhenHidden` to make Theia keep the webview
+         * context around, even when the webview moves to a background tab. When a webview using
+         * `retainContextWhenHidden` becomes hidden, its scripts and other dynamic content are suspended.
+         * When the panel becomes visible again, the context is automatically restored
+         * in the exact same state it was in originally. You cannot send messages to a
+         * hidden webview, even with `retainContextWhenHidden` enabled.
+         *
+         * `retainContextWhenHidden` has a high memory overhead and should only be used if
+         * your panel's context cannot be quickly saved and restored.
+         */
+        readonly retainContextWhenHidden?: boolean;
+    }
+
+    /**
+     * The areas of the application shell where webview panel can reside.
+     */
+    export enum WebviewPanelTargetArea {
+        Main = 'main',
+        Left = 'left',
+        Right = 'right',
+        Bottom = 'bottom'
+    }
+
+    /**
+     * Settings to determine where webview panel will be reside
+     */
+    export interface WebviewPanelShowOptions {
+        /**
+         * Target area where webview panel will be resided. Shows in the 'WebviewPanelTargetArea.Main' area if undefined.
+         */
+        area?: WebviewPanelTargetArea;
+
+        /**
+         * Editor View column to show the panel in. Shows in the current `viewColumn` if undefined.
+         */
+        viewColumn?: number;
+
+        /**
+         * When `true`, the webview will not take focus.
+         */
+        preserveFocus?: boolean;
+    }
+
+    /**
+     * A panel that contains a webview.
+     */
+    interface WebviewPanel {
+        /**
+         * Identifies the type of the webview panel, such as `'markdown.preview'`.
+         */
+        readonly viewType: string;
+
+        /**
+         * Title of the panel shown in UI.
+         */
+        title: string;
+
+        /**
+         * Icon for the panel shown in UI.
+         */
+        iconPath?: Uri | { light: Uri; dark: Uri };
+
+        /**
+         * Webview belonging to the panel.
+         */
+        readonly webview: Webview;
+
+        /**
+         * Content settings for the webview panel.
+         */
+        readonly options: WebviewPanelOptions;
+
+        /**
+         * Settings to determine where webview panel will be reside
+         */
+        readonly showOptions?: WebviewPanelShowOptions;
+        /**
+         * Editor position of the panel. This property is only set if the webview is in
+         * one of the editor view columns.
+         */
+        readonly viewColumn?: ViewColumn;
+
+        /**
+         * Whether the panel is active (focused by the user).
+         */
+        readonly active: boolean;
+
+        /**
+         * Whether the panel is visible.
+         */
+        readonly visible: boolean;
+
+        /**
+         * Fired when the panel's view state changes.
+         */
+        readonly onDidChangeViewState: Event<WebviewPanelOnDidChangeViewStateEvent>;
+
+        /**
+         * Fired when the panel is disposed.
+         *
+         * This may be because the user closed the panel or because `.dispose()` was
+         * called on it.
+         *
+         * Trying to use the panel after it has been disposed throws an exception.
+         */
+        readonly onDidDispose: Event<void>;
+
+        /**
+         * Show the webview panel in a given column.
+         *
+         * A webview panel may only show in a single column at a time. If it is already showing, this
+         * method moves it to a new column.
+         *
+         * @param viewColumn View column to show the panel in. Shows in the current `viewColumn` if undefined.
+         * @param preserveFocus When `true`, the webview will not take focus.
+         */
+        reveal(viewColumn?: ViewColumn, preserveFocus?: boolean): void;
+
+        /**
+         * Show the webview panel according to a given options.
+         *
+         * A webview panel may only show in a single column at a time. If it is already showing, this
+         * method moves it to a new column.
+         *
+         * @param area target area where webview panel will be resided. Shows in the 'WebviewPanelTargetArea.Main' area if undefined.
+         * @param viewColumn View column to show the panel in. Shows in the current `viewColumn` if undefined.
+         * @param preserveFocus When `true`, the webview will not take focus.
+         */
+        reveal(area?: WebviewPanelTargetArea, viewColumn?: ViewColumn, preserveFocus?: boolean): void;
+
+        /**
+         * Dispose of the webview panel.
+         *
+         * This closes the panel if it showing and disposes of the resources owned by the webview.
+         * Webview panels are also disposed when the user closes the webview panel. Both cases
+         * fire the `onDispose` event.
+         */
+        dispose(): void;
+    }
+
+    /**
+     * Event fired when a webview panel's view state changes.
+     */
+    export interface WebviewPanelOnDidChangeViewStateEvent {
+        /**
+         * Webview panel whose view state changed.
+         */
+        readonly webviewPanel: WebviewPanel;
+    }
+
+    /**
+     * Restore webview panels that have been persisted when vscode shuts down.
+     *
+     * There are two types of webview persistence:
+     *
+     * - Persistence within a session.
+     * - Persistence across sessions (across restarts of Theia).
+     *
+     * A `WebviewPanelSerializer` is only required for the second case: persisting a webview across sessions.
+     *
+     * Persistence within a session allows a webview to save its state when it becomes hidden
+     * and restore its content from this state when it becomes visible again. It is powered entirely
+     * by the webview content itself. To save off a persisted state, call `acquireVsCodeApi().setState()` with
+     * any json serializable object. To restore the state again, call `getState()`
+     *
+     * ```js
+     * // Within the webview
+     * const vscode = acquireVsCodeApi();
+     *
+     * // Get existing state
+     * const oldState = vscode.getState() || { value: 0 };
+     *
+     * // Update state
+     * setState({ value: oldState.value + 1 })
+     * ```
+     *
+     * A `WebviewPanelSerializer` extends this persistence across restarts of Theia. When the editor is shutdown,
+     * Theia will save off the state from `setState` of all webviews that have a serializer. When the
+     * webview first becomes visible after the restart, this state is passed to `deserializeWebviewPanel`.
+     * The extension can then restore the old `WebviewPanel` from this state.
+     */
+    interface WebviewPanelSerializer {
+        /**
+         * Restore a webview panel from its seriailzed `state`.
+         *
+         * Called when a serialized webview first becomes visible.
+         *
+         * @param webviewPanel Webview panel to restore. The serializer should take ownership of this panel. The
+         * serializer must restore the webview's `.html` and hook up all webview events.
+         * @param state Persisted state from the webview content.
+         *
+         * @return PromiseLike indicating that the webview has been fully restored.
+         */
+        deserializeWebviewPanel(webviewPanel: WebviewPanel, state: any): PromiseLike<void>;
+    }
+
+    /**
+     * The clipboard provides read and write access to the system's clipboard.
+     */
+    export interface Clipboard {
+
+        /**
+         * Read the current clipboard contents as text.
+         * @returns A thenable that resolves to a string.
+         */
+        readText(): PromiseLike<string>;
+
+        /**
+         * Writes text into the clipboard.
+         * @returns A thenable that resolves when writing happened.
+         */
+        writeText(value: string): PromiseLike<void>;
+    }
+
+    /**
+     * Possible kinds of UI that can use extensions.
+     */
+    export enum UIKind {
+
+        /**
+         * Extensions are accessed from a desktop application.
+         */
+        Desktop = 1,
+
+        /**
+         * Extensions are accessed from a web browser.
+         */
+        Web = 2
+    }
+
+    /**
+     * A uri handler is responsible for handling system-wide [uris](#Uri).
+     *
+     * @see [window.registerUriHandler](#window.registerUriHandler).
+     */
+    export interface UriHandler {
+
+        /**
+         * Handle the provided system-wide [uri](#Uri).
+         *
+         * @see [window.registerUriHandler](#window.registerUriHandler).
+         */
+        handleUri(uri: Uri): ProviderResult<void>;
     }
 
     /**
      * Common namespace for dealing with window and editor, showing messages and user input.
      */
     export namespace window {
+
+        /**
+         * The currently active terminal or undefined. The active terminal is the one
+         * that currently has focus or most recently had focus.
+         */
+        export let activeTerminal: Terminal | undefined;
 
         /**
          * The currently active editor or `undefined`. The active editor is the one
@@ -2328,9 +3200,20 @@ declare module '@theia/plugin' {
         export let activeTextEditor: TextEditor | undefined;
 
         /**
+         * The currently opened terminals or an empty array.
+         */
+        export let terminals: ReadonlyArray<Terminal>;
+
+        /**
          * The currently visible editors or an empty array.
          */
         export let visibleTextEditors: TextEditor[];
+
+        /**
+         * An [event](#Event) which fires when the [active terminal](#window.activeTerminal) has changed.
+         * *Note* that the event also fires when the active terminal changes to `undefined`.
+         */
+        export const onDidChangeActiveTerminal: Event<Terminal | undefined>;
 
         /**
          * An [event](#Event) which fires when the [active editor](#window.activeTextEditor)
@@ -2366,6 +3249,40 @@ declare module '@theia/plugin' {
         export const onDidChangeTextEditorViewColumn: Event<TextEditorViewColumnChangeEvent>;
 
         /**
+         * Show the given document in a text editor. A [column](#ViewColumn) can be provided
+         * to control where the editor is being shown. Might change the [active editor](#window.activeTextEditor).
+         *
+         * @param document A text document to be shown.
+         * @param column A view column in which the [editor](#TextEditor) should be shown. The default is the [active](#ViewColumn.Active), other values
+         * are adjusted to be `Min(column, columnCount + 1)`, the [active](#ViewColumn.Active)-column is not adjusted. Use [`ViewColumn.Beside`](#ViewColumn.Beside)
+         * to open the editor to the side of the currently active one.
+         * @param preserveFocus When `true` the editor will not take focus.
+         * @return A promise that resolves to an [editor](#TextEditor).
+         */
+        export function showTextDocument(document: TextDocument, column?: ViewColumn, preserveFocus?: boolean): PromiseLike<TextEditor>;
+
+        /**
+         * Show the given document in a text editor. [Options](#TextDocumentShowOptions) can be provided
+         * to control options of the editor is being shown. Might change the [active editor](#window.activeTextEditor).
+         *
+         * @param document A text document to be shown.
+         * @param options [Editor options](#TextDocumentShowOptions) to configure the behavior of showing the [editor](#TextEditor).
+         * @return A promise that resolves to an [editor](#TextEditor).
+         */
+        export function showTextDocument(document: TextDocument, options?: TextDocumentShowOptions): PromiseLike<TextEditor>;
+
+        /**
+         * A short-hand for `openTextDocument(uri).then(document => showTextDocument(document, options))`.
+         *
+         * @see [openTextDocument](#openTextDocument)
+         *
+         * @param uri A resource identifier.
+         * @param options [Editor options](#TextDocumentShowOptions) to configure the behavior of showing the [editor](#TextEditor).
+         * @return A promise that resolves to an [editor](#TextEditor).
+         */
+        export function showTextDocument(uri: Uri, options?: TextDocumentShowOptions): PromiseLike<TextEditor>;
+
+        /**
          * Shows a selection list.
          * @param items
          * @param options
@@ -2397,6 +3314,18 @@ declare module '@theia/plugin' {
             options: QuickPickOptions & { canPickMany: true },
             token?: CancellationToken
         ): PromiseLike<T[] | undefined>;
+
+        /**
+         * Creates a [QuickPick](#QuickPick) to let the user pick an item from a list
+         * of items of type T.
+         *
+         * Note that in many cases the more convenient [window.showQuickPick](#window.showQuickPick)
+         * is easier to use. [window.createQuickPick](#window.createQuickPick) should be used
+         * when [window.showQuickPick](#window.showQuickPick) does not offer the required flexibility.
+         *
+         * @return A new [QuickPick](#QuickPick).
+         */
+        export function createQuickPick<T extends QuickPickItem>(): QuickPick<T>;
 
         /**
          * Shows a selection list of [workspace folders](#workspace.workspaceFolders) to pick from.
@@ -2433,7 +3362,7 @@ declare module '@theia/plugin' {
          * @param items A set of items that will be rendered as actions in the message.
          * @return A promise that resolves to the selected item or `undefined` when being dismissed.
          */
-        export function showInformationMessage<T extends MessageItem>(message: string, options: MessageOptions, ...items: T[]): PromiseLike<T | undefined>;
+        export function showInformationMessage<T extends MessageItem>(message: string, ...items: T[]): PromiseLike<T | undefined>;
 
         /**
          * Show an information message.
@@ -2452,7 +3381,7 @@ declare module '@theia/plugin' {
          * @param items A set of items that will be rendered as actions in the message.
          * @return A promise that resolves to the selected item or `undefined` when being dismissed.
          */
-        export function showWarningMessage<T extends MessageItem>(message: string, options: MessageOptions, ...items: T[]): PromiseLike<T | undefined>;
+        export function showWarningMessage(message: string, ...items: string[]): PromiseLike<string | undefined>;
 
         /**
          * Show a warning message.
@@ -2490,7 +3419,7 @@ declare module '@theia/plugin' {
          * @param items A set of items that will be rendered as actions in the message.
          * @return A promise that resolves to the selected item or `undefined` when being dismissed.
          */
-        export function showErrorMessage<T extends MessageItem>(message: string, options: MessageOptions, ...items: T[]): PromiseLike<T | undefined>;
+        export function showErrorMessage(message: string, ...items: string[]): PromiseLike<string | undefined>;
 
         /**
          * Show an error message.
@@ -2551,6 +3480,40 @@ declare module '@theia/plugin' {
          * @returns A promise that resolves to the selected resource or `undefined`.
          */
         export function showSaveDialog(options: SaveDialogOptions): PromiseLike<Uri | undefined>;
+
+        /**
+         * Shows a file upload dialog to the user which allows to upload files
+         * for various purposes.
+         *
+         * @param options Options, that control the dialog.
+         * @returns A promise that resolves the paths of uploaded files or `undefined`.
+         */
+        export function showUploadDialog(options: UploadDialogOptions): PromiseLike<Uri[] | undefined>;
+
+        /**
+         * Create and show a new webview panel.
+         *
+         * @param viewType Identifies the type of the webview panel.
+         * @param title Title of the panel.
+         * @param showOptions where webview panel will be reside. If preserveFocus is set, the new webview will not take focus.
+         * @param options Settings for the new panel.
+         *
+         * @return New webview panel.
+         */
+        export function createWebviewPanel(viewType: string, title: string, showOptions: ViewColumn | WebviewPanelShowOptions, options?: WebviewPanelOptions & WebviewOptions): WebviewPanel;
+
+        /**
+         * Registers a webview panel serializer.
+         *
+         * Plugins that support reviving should have an `"onWebviewPanel:viewType"` activation event and
+         * make sure that [registerWebviewPanelSerializer](#registerWebviewPanelSerializer) is called during activation.
+         *
+         * Only a single serializer may be registered at a time for a given `viewType`.
+         *
+         * @param viewType Type of the webview panel that can be serialized.
+         * @param serializer Webview serializer.
+         */
+        export function registerWebviewPanelSerializer(viewType: string, serializer: WebviewPanelSerializer): Disposable;
 
         /**
          * Represents the current window's state.
@@ -2629,10 +3592,25 @@ declare module '@theia/plugin' {
         export const onDidCloseTerminal: Event<Terminal>;
 
         /**
+         * An [event](#Event) which fires when a terminal has been created,
+         * either through the createTerminal API or commands.
+         */
+        export const onDidOpenTerminal: Event<Terminal>;
+
+        /**
          * Create new terminal with predefined options.
          * @param - terminal options.
          */
         export function createTerminal(options: TerminalOptions): Terminal;
+
+        /**
+         * Creates a pseudo where an extension controls its input and output.
+         *
+         * @param options PseudoTerminalOptions.
+         * @return A new Terminal.
+         */
+        export function createTerminal(options: PseudoTerminalOptions): Terminal;
+
 
         /**
          * Register a [TreeDataProvider](#TreeDataProvider) for the view contributed using the extension point `views`.
@@ -2651,8 +3629,309 @@ declare module '@theia/plugin' {
          * @param options Options object to provide [TreeDataProvider](#TreeDataProvider) for the view.
          * @returns a [TreeView](#TreeView).
          */
-        export function createTreeView<T>(viewId: string, options: { treeDataProvider: TreeDataProvider<T> }): TreeView<T>;
+        export function createTreeView<T>(viewId: string, options: TreeViewOptions<T>): TreeView<T>;
 
+        /**
+         * Registers a [uri handler](#UriHandler) capable of handling system-wide [uris](#Uri).
+         * In case there are multiple windows open, the topmost window will handle the uri.
+         * A uri handler is scoped to the extension it is contributed from; it will only
+         * be able to handle uris which are directed to the extension itself. A uri must respect
+         * the following rules:
+         *
+         * - The uri-scheme must be the product name;
+         * - The uri-authority must be the extension id (eg. `my.extension`);
+         * - The uri-path, -query and -fragment parts are arbitrary.
+         *
+         * For example, if the `my.extension` extension registers a uri handler, it will only
+         * be allowed to handle uris with the prefix `product-name://my.extension`.
+         *
+         * An extension can only register a single uri handler in its entire activation lifetime.
+         *
+         * * *Note:* There is an activation event `onUri` that fires when a uri directed for
+         * the current extension is about to be handled.
+         *
+         * @param handler The uri handler to register for this extension.
+         */
+        export function registerUriHandler(handler: UriHandler): Disposable;
+
+        /**
+         * Show progress in the editor. Progress is shown while running the given callback
+         * and while the promise it returned isn't resolved nor rejected. The location at which
+         * progress should show (and other details) is defined via the passed [`ProgressOptions`](#ProgressOptions).
+         *
+         * @param task A callback returning a promise. Progress state can be reported with
+         * the provided [progress](#Progress)-object.
+         *
+         * To report discrete progress, use `increment` to indicate how much work has been completed. Each call with
+         * a `increment` value will be summed up and reflected as overall progress until 100% is reached (a value of
+         * e.g. `10` accounts for `10%` of work done).
+         * Note that currently only `ProgressLocation.Notification` is capable of showing discrete progress.
+         *
+         * To monitor if the operation has been cancelled by the user, use the provided [`CancellationToken`](#CancellationToken).
+         * Note that currently only `ProgressLocation.Notification` is supporting to show a cancel button to cancel the
+         * long running operation.
+         *
+         * @return The thenable the task-callback returned.
+         */
+        export function withProgress<R>(options: ProgressOptions, task: (progress: Progress<{ message?: string; increment?: number }>, token: CancellationToken) => PromiseLike<R>): PromiseLike<R>;
+
+        /**
+         * Creates a [InputBox](#InputBox) to let the user enter some text input.
+         *
+         * Note that in many cases the more convenient [window.showInputBox](#window.showInputBox)
+         * is easier to use. [window.createInputBox](#window.createInputBox) should be used
+         * when [window.showInputBox](#window.showInputBox) does not offer the required flexibility.
+         *
+         * @return A new [InputBox](#InputBox).
+         */
+        export function createInputBox(): InputBox;
+    }
+
+    /**
+     * Predefined buttons for [QuickPick](#QuickPick) and [InputBox](#InputBox).
+     */
+    export class QuickInputButtons {
+
+        /**
+         * A back button for [QuickPick](#QuickPick) and [InputBox](#InputBox).
+         *
+         * When a navigation 'back' button is needed this one should be used for consistency.
+         * It comes with a predefined icon, tooltip and location.
+         */
+        static readonly Back: QuickInputButton;
+
+        /**
+         * @hidden
+         */
+        private constructor();
+    }
+
+    /**
+     * A concrete [QuickInput](#QuickInput) to let the user input a text value.
+     *
+     * Note that in many cases the more convenient [window.showInputBox](#window.showInputBox)
+     * is easier to use. [window.createInputBox](#window.createInputBox) should be used
+     * when [window.showInputBox](#window.showInputBox) does not offer the required flexibility.
+     */
+    export interface InputBox extends QuickInput {
+
+        /**
+         * Current input value.
+         */
+        value: string;
+
+        /**
+         * Optional placeholder in the filter text.
+         */
+        placeholder: string | undefined;
+
+        /**
+         * If the input value should be hidden. Defaults to false.
+         */
+        password: boolean;
+
+        /**
+         * An event signaling when the value has changed.
+         */
+        readonly onDidChangeValue: Event<string>;
+
+        /**
+         * An event signaling when the user indicated acceptance of the input value.
+         */
+        readonly onDidAccept: Event<void>;
+
+        /**
+         * Buttons for actions in the UI.
+         */
+        buttons: ReadonlyArray<QuickInputButton>;
+
+        /**
+         * An event signaling when a button was triggered.
+         */
+        readonly onDidTriggerButton: Event<QuickInputButton>;
+
+        /**
+         * An optional prompt text providing some ask or explanation to the user.
+         */
+        prompt: string | undefined;
+
+        /**
+         * An optional validation message indicating a problem with the current input value.
+         */
+        validationMessage: string | undefined;
+    }
+
+    /**
+     * A light-weight user input UI that is initially not visible. After
+     * configuring it through its properties the extension can make it
+     * visible by calling [QuickInput.show](#QuickInput.show).
+     *
+     * There are several reasons why this UI might have to be hidden and
+     * the extension will be notified through [QuickInput.onDidHide](#QuickInput.onDidHide).
+     * (Examples include: an explicit call to [QuickInput.hide](#QuickInput.hide),
+     * the user pressing Esc, some other input UI opening, etc.)
+     *
+     * A user pressing Enter or some other gesture implying acceptance
+     * of the current state does not automatically hide this UI component.
+     * It is up to the extension to decide whether to accept the user's input
+     * and if the UI should indeed be hidden through a call to [QuickInput.hide](#QuickInput.hide).
+     *
+     * When the extension no longer needs this input UI, it should
+     * [QuickInput.dispose](#QuickInput.dispose) it to allow for freeing up
+     * any resources associated with it.
+     *
+     * See [QuickPick](#QuickPick) and [InputBox](#InputBox) for concrete UIs.
+     */
+    export interface QuickInput {
+
+        /**
+         * An optional title.
+         */
+        title: string | undefined;
+
+        /**
+         * An optional current step count.
+         */
+        step: number | undefined;
+
+        /**
+         * An optional total step count.
+         */
+        totalSteps: number | undefined;
+
+        /**
+         * If the UI should allow for user input. Defaults to true.
+         *
+         * Change this to false, e.g., while validating user input or
+         * loading data for the next step in user input.
+         */
+        enabled: boolean;
+
+        /**
+         * If the UI should show a progress indicator. Defaults to false.
+         *
+         * Change this to true, e.g., while loading more data or validating
+         * user input.
+         */
+        busy: boolean;
+
+        /**
+         * If the UI should stay open even when loosing UI focus. Defaults to false.
+         */
+        ignoreFocusOut: boolean;
+
+        /**
+         * Makes the input UI visible in its current configuration. Any other input
+         * UI will first fire an [QuickInput.onDidHide](#QuickInput.onDidHide) event.
+         */
+        show(): void;
+
+        /**
+         * Hides this input UI. This will also fire an [QuickInput.onDidHide](#QuickInput.onDidHide)
+         * event.
+         */
+        hide(): void;
+
+        /**
+         * An event signaling when this input UI is hidden.
+         *
+         * There are several reasons why this UI might have to be hidden and
+         * the extension will be notified through [QuickInput.onDidHide](#QuickInput.onDidHide).
+         * (Examples include: an explicit call to [QuickInput.hide](#QuickInput.hide),
+         * the user pressing Esc, some other input UI opening, etc.)
+         */
+        onDidHide: Event<void>;
+
+        /**
+         * Dispose of this input UI and any associated resources. If it is still
+         * visible, it is first hidden. After this call the input UI is no longer
+         * functional and no additional methods or properties on it should be
+         * accessed. Instead a new input UI should be created.
+         */
+        dispose(): void;
+    }
+
+    /**
+     * Button for an action in a [QuickPick](#QuickPick) or [InputBox](#InputBox).
+     */
+    export interface QuickInputButton {
+
+        /**
+         * Icon for the button.
+         */
+        readonly iconPath: Uri | { light: Uri; dark: Uri } | ThemeIcon;
+
+        /**
+         * An optional tooltip.
+         */
+        readonly tooltip?: string | undefined;
+    }
+    /**
+     * Value-object describing where and how progress should show.
+     */
+    export interface ProgressOptions {
+        /**
+         * The location at which progress should show.
+         */
+        location: ProgressLocation;
+        /**
+         * A human-readable string which will be used to describe the
+         * operation.
+         */
+        title?: string;
+        /**
+         * Controls if a cancel button should show to allow the user to
+         * cancel the long running operation.  Note that currently only
+         * `ProgressLocation.Notification` is supporting to show a cancel
+         * button.
+         */
+        cancellable?: boolean;
+    }
+    /**
+     * A location in the editor at which progress information can be shown. It depends on the
+     * location how progress is visually represented.
+     */
+    export enum ProgressLocation {
+        /**
+         * Show progress for the source control viewlet, as overlay for the icon and as progress bar
+         * inside the viewlet (when visible). Neither supports cancellation nor discrete progress.
+         */
+        SourceControl = 1,
+        /**
+         * Show progress in the status bar of the editor. Neither supports cancellation nor discrete progress.
+         */
+        Window = 10,
+        /**
+         * Show progress as notification with an optional cancel button. Supports to show infinite and discrete progress.
+         */
+        Notification = 15
+    }
+    /**
+     * Defines a generalized way of reporting progress updates.
+     */
+    export interface Progress<T> {
+        /**
+         * Report a progress update.
+         * @param value A progress item, like a message and/or an
+         * report on how much work finished
+         */
+        report(value: T): void;
+    }
+
+    /**
+     * Options for creating a [TreeView](#TreeView)
+     */
+    export interface TreeViewOptions<T> {
+
+        /**
+         * A data provider that provides tree data.
+         */
+        treeDataProvider: TreeDataProvider<T>;
+
+        /**
+         * Whether to show collapse all action or not.
+         */
+        showCollapseAll?: boolean;
     }
 
     /**
@@ -2664,6 +3943,30 @@ declare module '@theia/plugin' {
          * Element that is expanded or collapsed.
          */
         element: T;
+
+    }
+
+    /**
+     * The event that is fired when there is a change in [tree view's selection](#TreeView.selection)
+     */
+    export interface TreeViewSelectionChangeEvent<T> {
+
+        /**
+         * Selected elements.
+         */
+        readonly selection: T[];
+
+    }
+
+    /**
+     * The event that is fired when there is a change in [tree view's visibility](#TreeView.visible)
+     */
+    export interface TreeViewVisibilityChangeEvent {
+
+        /**
+         * `true` if the [tree view](#TreeView) is visible otherwise `false`.
+         */
+        readonly visible: boolean;
 
     }
 
@@ -2688,13 +3991,40 @@ declare module '@theia/plugin' {
         readonly selection: ReadonlyArray<T>;
 
         /**
+         * Event that is fired when the [selection](#TreeView.selection) has changed
+         */
+        readonly onDidChangeSelection: Event<TreeViewSelectionChangeEvent<T>>;
+
+        /**
+         * `true` if the [tree view](#TreeView) is visible otherwise `false`.
+         */
+        readonly visible: boolean;
+
+        /**
+         * Event that is fired when [visibility](#TreeView.visible) has changed
+         */
+        readonly onDidChangeVisibility: Event<TreeViewVisibilityChangeEvent>;
+
+        /**
+         * An optional human-readable message that will be rendered in the view.
+         * Setting the message to null, undefined, or empty string will remove the message from the view.
+         */
+        message?: string;
+
+        /**
+         * The tree view title is initially taken from the extension package.json
+         * Changes to the title property will be properly reflected in the UI in the title of the view.
+         */
+        title?: string;
+
+        /**
          * Reveal an element. By default revealed element is selected.
          *
          * In order to not to select, set the option `select` to `false`.
          *
          * **NOTE:** [TreeDataProvider](#TreeDataProvider) is required to implement [getParent](#TreeDataProvider.getParent) method to access this API.
          */
-        reveal(element: T, options?: { select?: boolean }): PromiseLike<void>;
+        reveal(element: T, options?: { select?: boolean, focus?: boolean, expand?: boolean | number }): PromiseLike<void>;
     }
 
     /**
@@ -2757,6 +4087,12 @@ declare module '@theia/plugin' {
         iconPath?: string | Uri | { light: string | Uri; dark: string | Uri } | ThemeIcon;
 
         /**
+         * A human readable string which is rendered less prominent.
+         * When `true`, it is derived from [resourceUri](#TreeItem.resourceUri) and when `falsy`, it is not shown.
+         */
+        description?: string | boolean;
+
+        /**
          * The [uri](#Uri) of the resource representing this item.
          *
          * Will be used to derive the [label](#TreeItem.label), when it is not provided.
@@ -2784,32 +4120,32 @@ declare module '@theia/plugin' {
          * For example, a tree item is given a context value as `folder`. When contributing actions to `view/item/context`
          * using `menus` extension point, you can specify context value for key `viewItem` in `when` expression like `viewItem == folder`.
          * ```
-         *	"contributes": {
-         *		"menus": {
-         *			"view/item/context": [
-         *				{
-         *					"command": "extension.deleteFolder",
-            *					"when": "viewItem == folder"
-            *				}
-            *			]
-            *		}
-            *	}
-            * ```
-            * This will show action `extension.deleteFolder` only for items with `contextValue` is `folder`.
-            */
+         *    "contributes": {
+         *        "menus": {
+         *            "view/item/context": [
+         *                {
+         *                    "command": "extension.deleteFolder",
+         *                    "when": "viewItem == folder"
+         *                }
+         *            ]
+         *        }
+         *    }
+         * ```
+         * This will show action `extension.deleteFolder` only for items with `contextValue` is `folder`.
+         */
         contextValue?: string;
 
-		/**
-		 * @param label A human-readable string describing this item
-		 * @param collapsibleState [TreeItemCollapsibleState](#TreeItemCollapsibleState) of the tree item. Default is [TreeItemCollapsibleState.None](#TreeItemCollapsibleState.None)
-		 */
-        // constructor(label: string, collapsibleState?: TreeItemCollapsibleState);
+        /**
+         * @param label A human-readable string describing this item
+         * @param collapsibleState [TreeItemCollapsibleState](#TreeItemCollapsibleState) of the tree item. Default is [TreeItemCollapsibleState.None](#TreeItemCollapsibleState.None)
+         */
+        constructor(label: string, collapsibleState?: TreeItemCollapsibleState);
 
-		/**
-		 * @param resourceUri The [uri](#Uri) of the resource representing this item.
-		 * @param collapsibleState [TreeItemCollapsibleState](#TreeItemCollapsibleState) of the tree item. Default is [TreeItemCollapsibleState.None](#TreeItemCollapsibleState.None)
-		 */
-        // constructor(resourceUri: Uri, collapsibleState?: TreeItemCollapsibleState);
+        /**
+         * @param resourceUri The [uri](#Uri) of the resource representing this item.
+         * @param collapsibleState [TreeItemCollapsibleState](#TreeItemCollapsibleState) of the tree item. Default is [TreeItemCollapsibleState.None](#TreeItemCollapsibleState.None)
+         */
+        constructor(resourceUri: Uri, collapsibleState?: TreeItemCollapsibleState);
     }
 
     /**
@@ -2953,11 +4289,15 @@ declare module '@theia/plugin' {
         /**
          * Global configuration
          */
-        User = 0,
+        Global = 1,
         /**
          * Workspace configuration
          */
-        Workspace = 1
+        Workspace = 2,
+        /**
+         * Workspace folder configuration
+         */
+        WorkspaceFolder = 3
     }
 
     /**
@@ -3015,215 +4355,513 @@ declare module '@theia/plugin' {
         readonly index: number;
     }
 
-	/**
-	 * Enumeration of file types. The types `File` and `Directory` can also be
-	 * a symbolic links, in that use `FileType.File | FileType.SymbolicLink` and
-	 * `FileType.Directory | FileType.SymbolicLink`.
-	 */
-	export enum FileType {
-		/**
-		 * The file type is unknown.
-		 */
-		Unknown = 0,
-		/**
-		 * A regular file.
-		 */
-		File = 1,
-		/**
-		 * A directory.
-		 */
-		Directory = 2,
-		/**
-		 * A symbolic link to a file.
-		 */
-		SymbolicLink = 64
-	}
+    /**
+     * Enumeration of file types. The types `File` and `Directory` can also be
+     * a symbolic links, in that use `FileType.File | FileType.SymbolicLink` and
+     * `FileType.Directory | FileType.SymbolicLink`.
+     */
+    export enum FileType {
+        /**
+         * The file type is unknown.
+         */
+        Unknown = 0,
+        /**
+         * A regular file.
+         */
+        File = 1,
+        /**
+         * A directory.
+         */
+        Directory = 2,
+        /**
+         * A symbolic link to a file.
+         */
+        SymbolicLink = 64
+    }
 
-	/**
-	 * The `FileStat`-type represents metadata about a file
-	 */
-	export interface FileStat {
-		/**
-		 * The type of the file, e.g. is a regular file, a directory, or symbolic link
-		 * to a file.
-		 */
-		type: FileType;
-		/**
-		 * The creation timestamp in milliseconds elapsed since January 1, 1970 00:00:00 UTC.
-		 */
-		ctime: number;
-		/**
-		 * The modification timestamp in milliseconds elapsed since January 1, 1970 00:00:00 UTC.
-		 */
-		mtime: number;
-		/**
-		 * The size in bytes.
-		 */
-		size: number;
-	}
+    /**
+     * The `FileStat`-type represents metadata about a file
+     */
+    export interface FileStat {
+        /**
+         * The type of the file, e.g. is a regular file, a directory, or symbolic link
+         * to a file.
+         */
+        type: FileType;
+        /**
+         * The creation timestamp in milliseconds elapsed since January 1, 1970 00:00:00 UTC.
+         */
+        ctime: number;
+        /**
+         * The modification timestamp in milliseconds elapsed since January 1, 1970 00:00:00 UTC.
+         */
+        mtime: number;
+        /**
+         * The size in bytes.
+         */
+        size: number;
+    }
 
-	/**
-	 * Enumeration of file change types.
-	 */
-	export enum FileChangeType {
+    /**
+     * A type that filesystem providers should use to signal errors.
+     *
+     * This class has factory methods for common error-cases, like `EntryNotFound` when
+     * a file or folder doesn't exist, use them like so: `throw vscode.FileSystemError.EntryNotFound(someUri);`
+     */
+    export class FileSystemError extends Error {
 
-		/**
-		 * The contents or metadata of a file have changed.
-		 */
-		Changed = 1,
+        /**
+         * Create an error to signal that a file or folder wasn't found.
+         * @param messageOrUri Message or uri.
+         */
+        static FileNotFound(messageOrUri?: string | Uri): FileSystemError;
 
-		/**
-		 * A file has been created.
-		 */
-		Created = 2,
+        /**
+         * Create an error to signal that a file or folder already exists, e.g. when
+         * creating but not overwriting a file.
+         * @param messageOrUri Message or uri.
+         */
+        static FileExists(messageOrUri?: string | Uri): FileSystemError;
 
-		/**
-		 * A file has been deleted.
-		 */
-		Deleted = 3,
-	}
+        /**
+         * Create an error to signal that a file is not a folder.
+         * @param messageOrUri Message or uri.
+         */
+        static FileNotADirectory(messageOrUri?: string | Uri): FileSystemError;
 
-	/**
-	 * The event filesystem providers must use to signal a file change.
-	 */
-	export interface FileChangeEvent {
+        /**
+         * Create an error to signal that a file is a folder.
+         * @param messageOrUri Message or uri.
+         */
+        static FileIsADirectory(messageOrUri?: string | Uri): FileSystemError;
 
-		/**
-		 * The type of change.
-		 */
-		type: FileChangeType;
+        /**
+         * Create an error to signal that an operation lacks required permissions.
+         * @param messageOrUri Message or uri.
+         */
+        static NoPermissions(messageOrUri?: string | Uri): FileSystemError;
 
-		/**
-		 * The uri of the file that has changed.
-		 */
-		uri: Uri;
-	}
+        /**
+         * Create an error to signal that the file system is unavailable or too busy to
+         * complete a request.
+         * @param messageOrUri Message or uri.
+         */
+        static Unavailable(messageOrUri?: string | Uri): FileSystemError;
 
-	/**
-	 * The filesystem provider defines what the editor needs to read, write, discover,
-	 * and to manage files and folders. It allows extensions to serve files from remote places,
-	 * like ftp-servers, and to seamlessly integrate those into the editor.
-	 *
-	 * * *Note 1:* The filesystem provider API works with [uris](#Uri) and assumes hierarchical
-	 * paths, e.g. `foo:/my/path` is a child of `foo:/my/` and a parent of `foo:/my/path/deeper`.
-	 * * *Note 2:* There is an activation event `onFileSystem:<scheme>` that fires when a file
-	 * or folder is being accessed.
-	 * * *Note 3:* The word 'file' is often used to denote all [kinds](#FileType) of files, e.g.
-	 * folders, symbolic links, and regular files.
-	 */
-	export interface FileSystemProvider {
+        /**
+         * Creates a new filesystem error.
+         *
+         * @param messageOrUri Message or uri.
+         */
+        constructor(messageOrUri?: string | Uri);
+    }
 
-		/**
-		 * An event to signal that a resource has been created, changed, or deleted. This
-		 * event should fire for resources that are being [watched](#FileSystemProvider.watch)
-		 * by clients of this provider.
-		 */
-		readonly onDidChangeFile: Event<FileChangeEvent[]>;
+    /**
+     * Enumeration of file change types.
+     */
+    export enum FileChangeType {
 
-		/**
-		 * Subscribe to events in the file or folder denoted by `uri`.
-		 *
-		 * The editor will call this function for files and folders. In the latter case, the
-		 * options differ from defaults, e.g. what files/folders to exclude from watching
-		 * and if subfolders, sub-subfolder, etc. should be watched (`recursive`).
-		 *
-		 * @param uri The uri of the file to be watched.
-		 * @param options Configures the watch.
-		 * @returns A disposable that tells the provider to stop watching the `uri`.
-		 */
-		watch(uri: Uri, options: { recursive: boolean; excludes: string[] }): Disposable;
+        /**
+         * The contents or metadata of a file have changed.
+         */
+        Changed = 1,
 
-		/**
-		 * Retrieve metadata about a file.
-		 *
-		 * Note that the metadata for symbolic links should be the metadata of the file they refer to.
-		 * Still, the [SymbolicLink](#FileType.SymbolicLink)-type must be used in addition to the actual type, e.g.
-		 * `FileType.SymbolicLink | FileType.Directory`.
-		 *
-		 * @param uri The uri of the file to retrieve metadata about.
-		 * @return The file metadata about the file.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist.
-		 */
-		stat(uri: Uri): FileStat | PromiseLike<FileStat>;
+        /**
+         * A file has been created.
+         */
+        Created = 2,
 
-		/**
-		 * Retrieve all entries of a [directory](#FileType.Directory).
-		 *
-		 * @param uri The uri of the folder.
-		 * @return An array of name/type-tuples or a thenable that resolves to such.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist.
-		 */
-		readDirectory(uri: Uri): [string, FileType][] | PromiseLike<[string, FileType][]>;
+        /**
+         * A file has been deleted.
+         */
+        Deleted = 3,
+    }
 
-		/**
-		 * Create a new directory (Note, that new files are created via `write`-calls).
-		 *
-		 * @param uri The uri of the new folder.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when the parent of `uri` doesn't exist, e.g. no mkdirp-logic required.
-		 * @throws [`FileExists`](#FileSystemError.FileExists) when `uri` already exists.
-		 * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
-		 */
-		createDirectory(uri: Uri): void | PromiseLike<void>;
+    /**
+     * The event filesystem providers must use to signal a file change.
+     */
+    export interface FileChangeEvent {
 
-		/**
-		 * Read the entire contents of a file.
-		 *
-		 * @param uri The uri of the file.
-		 * @return An array of bytes or a thenable that resolves to such.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist.
-		 */
-		readFile(uri: Uri): Uint8Array | PromiseLike<Uint8Array>;
+        /**
+         * The type of change.
+         */
+        type: FileChangeType;
 
-		/**
-		 * Write data to a file, replacing its entire contents.
-		 *
-		 * @param uri The uri of the file.
-		 * @param content The new content of the file.
-		 * @param options Defines if missing files should or must be created.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist and `create` is not set.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when the parent of `uri` doesn't exist and `create` is set, e.g. no mkdirp-logic required.
-		 * @throws [`FileExists`](#FileSystemError.FileExists) when `uri` already exists, `create` is set but `overwrite` is not set.
-		 * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
-		 */
-		writeFile(uri: Uri, content: Uint8Array, options: { create: boolean, overwrite: boolean }): void | PromiseLike<void>;
+        /**
+         * The uri of the file that has changed.
+         */
+        uri: Uri;
+    }
 
-		/**
-		 * Delete a file.
-		 *
-		 * @param uri The resource that is to be deleted.
-		 * @param options Defines if deletion of folders is recursive.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist.
-		 * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
-		 */
-		delete(uri: Uri, options: { recursive: boolean }): void | PromiseLike<void>;
+    /**
+     * The filesystem provider defines what the editor needs to read, write, discover,
+     * and to manage files and folders. It allows extensions to serve files from remote places,
+     * like ftp-servers, and to seamlessly integrate those into the editor.
+     *
+     * * *Note 1:* The filesystem provider API works with [uris](#Uri) and assumes hierarchical
+     * paths, e.g. `foo:/my/path` is a child of `foo:/my/` and a parent of `foo:/my/path/deeper`.
+     * * *Note 2:* There is an activation event `onFileSystem:<scheme>` that fires when a file
+     * or folder is being accessed.
+     * * *Note 3:* The word 'file' is often used to denote all [kinds](#FileType) of files, e.g.
+     * folders, symbolic links, and regular files.
+     */
+    export interface FileSystemProvider {
 
-		/**
-		 * Rename a file or folder.
-		 *
-		 * @param oldUri The existing file.
-		 * @param newUri The new location.
-		 * @param options Defines if existing files should be overwritten.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `oldUri` doesn't exist.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when parent of `newUri` doesn't exist, e.g. no mkdirp-logic required.
-		 * @throws [`FileExists`](#FileSystemError.FileExists) when `newUri` exists and when the `overwrite` option is not `true`.
-		 * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
-		 */
-		rename(oldUri: Uri, newUri: Uri, options: { overwrite: boolean }): void | PromiseLike<void>;
+        /**
+         * An event to signal that a resource has been created, changed, or deleted. This
+         * event should fire for resources that are being [watched](#FileSystemProvider.watch)
+         * by clients of this provider.
+         */
+        readonly onDidChangeFile: Event<FileChangeEvent[]>;
 
-		/**
-		 * Copy files or folders. Implementing this function is optional but it will speedup
-		 * the copy operation.
-		 *
-		 * @param source The existing file.
-		 * @param destination The destination location.
-		 * @param options Defines if existing files should be overwriten.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `source` doesn't exist.
-		 * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when parent of `destination` doesn't exist, e.g. no mkdirp-logic required.
-		 * @throws [`FileExists`](#FileSystemError.FileExists) when `destination` exists and when the `overwrite` option is not `true`.
-		 * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
-		 */
-		copy?(source: Uri, destination: Uri, options: { overwrite: boolean }): void | PromiseLike<void>;
-	}
+        /**
+         * Subscribe to events in the file or folder denoted by `uri`.
+         *
+         * The editor will call this function for files and folders. In the latter case, the
+         * options differ from defaults, e.g. what files/folders to exclude from watching
+         * and if subfolders, sub-subfolder, etc. should be watched (`recursive`).
+         *
+         * @param uri The uri of the file to be watched.
+         * @param options Configures the watch.
+         * @returns A disposable that tells the provider to stop watching the `uri`.
+         */
+        watch(uri: Uri, options: { recursive: boolean; excludes: string[] }): Disposable;
+
+        /**
+         * Retrieve metadata about a file.
+         *
+         * Note that the metadata for symbolic links should be the metadata of the file they refer to.
+         * Still, the [SymbolicLink](#FileType.SymbolicLink)-type must be used in addition to the actual type, e.g.
+         * `FileType.SymbolicLink | FileType.Directory`.
+         *
+         * @param uri The uri of the file to retrieve metadata about.
+         * @return The file metadata about the file.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist.
+         */
+        stat(uri: Uri): FileStat | PromiseLike<FileStat>;
+
+        /**
+         * Retrieve all entries of a [directory](#FileType.Directory).
+         *
+         * @param uri The uri of the folder.
+         * @return An array of name/type-tuples or a thenable that resolves to such.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist.
+         */
+        readDirectory(uri: Uri): [string, FileType][] | PromiseLike<[string, FileType][]>;
+
+        /**
+         * Create a new directory (Note, that new files are created via `write`-calls).
+         *
+         * @param uri The uri of the new folder.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when the parent of `uri` doesn't exist, e.g. no mkdirp-logic required.
+         * @throws [`FileExists`](#FileSystemError.FileExists) when `uri` already exists.
+         * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
+         */
+        createDirectory(uri: Uri): void | PromiseLike<void>;
+
+        /**
+         * Read the entire contents of a file.
+         *
+         * @param uri The uri of the file.
+         * @return An array of bytes or a thenable that resolves to such.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist.
+         */
+        readFile(uri: Uri): Uint8Array | PromiseLike<Uint8Array>;
+
+        /**
+         * Write data to a file, replacing its entire contents.
+         *
+         * @param uri The uri of the file.
+         * @param content The new content of the file.
+         * @param options Defines if missing files should or must be created.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist and `create` is not set.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when the parent of `uri` doesn't exist and `create` is set, e.g. no mkdirp-logic required.
+         * @throws [`FileExists`](#FileSystemError.FileExists) when `uri` already exists, `create` is set but `overwrite` is not set.
+         * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
+         */
+        writeFile(uri: Uri, content: Uint8Array, options: { create: boolean, overwrite: boolean }): void | PromiseLike<void>;
+
+        /**
+         * Delete a file.
+         *
+         * @param uri The resource that is to be deleted.
+         * @param options Defines if deletion of folders is recursive.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `uri` doesn't exist.
+         * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
+         */
+        delete(uri: Uri, options: { recursive: boolean }): void | PromiseLike<void>;
+
+        /**
+         * Rename a file or folder.
+         *
+         * @param oldUri The existing file.
+         * @param newUri The new location.
+         * @param options Defines if existing files should be overwritten.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `oldUri` doesn't exist.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when parent of `newUri` doesn't exist, e.g. no mkdirp-logic required.
+         * @throws [`FileExists`](#FileSystemError.FileExists) when `newUri` exists and when the `overwrite` option is not `true`.
+         * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
+         */
+        rename(oldUri: Uri, newUri: Uri, options: { overwrite: boolean }): void | PromiseLike<void>;
+
+        /**
+         * Copy files or folders. Implementing this function is optional but it will speedup
+         * the copy operation.
+         *
+         * @param source The existing file.
+         * @param destination The destination location.
+         * @param options Defines if existing files should be overwriten.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when `source` doesn't exist.
+         * @throws [`FileNotFound`](#FileSystemError.FileNotFound) when parent of `destination` doesn't exist, e.g. no mkdirp-logic required.
+         * @throws [`FileExists`](#FileSystemError.FileExists) when `destination` exists and when the `overwrite` option is not `true`.
+         * @throws [`NoPermissions`](#FileSystemError.NoPermissions) when permissions aren't sufficient.
+         */
+        copy?(source: Uri, destination: Uri, options: { overwrite: boolean }): void | PromiseLike<void>;
+    }
+
+    /**
+     * The file system interface exposes the editor's built-in and contributed
+     * [file system providers](#FileSystemProvider). It allows extensions to work
+     * with files from the local disk as well as files from remote places, like the
+     * remote extension host or ftp-servers.
+     *
+     * *Note* that an instance of this interface is avaiable as [`workspace.fs`](#workspace.fs).
+     */
+    export interface FileSystem {
+
+        /**
+         * Retrieve metadata about a file.
+         *
+         * @param uri The uri of the file to retrieve metadata about.
+         * @return The file metadata about the file.
+         */
+        stat(uri: Uri): PromiseLike<FileStat>;
+
+        /**
+         * Retrieve all entries of a [directory](#FileType.Directory).
+         *
+         * @param uri The uri of the folder.
+         * @return An array of name/type-tuples or a PromiseLike that resolves to such.
+         */
+        readDirectory(uri: Uri): PromiseLike<[string, FileType][]>;
+
+        /**
+         * Create a new directory (Note, that new files are created via `write`-calls).
+         *
+         * *Note* that missing directories are created automatically, e.g this call has
+         * `mkdirp` semantics.
+         *
+         * @param uri The uri of the new folder.
+         */
+        createDirectory(uri: Uri): PromiseLike<void>;
+
+        /**
+         * Read the entire contents of a file.
+         *
+         * @param uri The uri of the file.
+         * @return An array of bytes or a PromiseLike that resolves to such.
+         */
+        readFile(uri: Uri): PromiseLike<Uint8Array>;
+
+        /**
+         * Write data to a file, replacing its entire contents.
+         *
+         * @param uri The uri of the file.
+         * @param content The new content of the file.
+         */
+        writeFile(uri: Uri, content: Uint8Array): PromiseLike<void>;
+
+        /**
+         * Delete a file.
+         *
+         * @param uri The resource that is to be deleted.
+         * @param options Defines if trash can should be used and if deletion of folders is recursive
+         */
+        delete(uri: Uri, options?: { recursive?: boolean, useTrash?: boolean }): PromiseLike<void>;
+
+        /**
+         * Rename a file or folder.
+         *
+         * @param source The existing file.
+         * @param target The new location.
+         * @param options Defines if existing files should be overwritten.
+         */
+        rename(source: Uri, target: Uri, options?: { overwrite?: boolean }): PromiseLike<void>;
+
+        /**
+         * Copy files or folders.
+         *
+         * @param source The existing file.
+         * @param target The destination location.
+         * @param options Defines if existing files should be overwritten.
+         */
+        copy(source: Uri, target: Uri, options?: { overwrite?: boolean }): PromiseLike<void>;
+    }
+
+    /**
+     * An event that is fired when files are going to be created.
+     *
+     * To make modifications to the workspace before the files are created,
+     * call the [`waitUntil](#FileWillCreateEvent.waitUntil)-function with a
+     * thenable that resolves to a [workspace edit](#WorkspaceEdit).
+     */
+    export interface FileWillCreateEvent {
+
+        /**
+         * The files that are going to be created.
+         */
+        readonly files: ReadonlyArray<Uri>;
+
+        /**
+         * Allows to pause the event and to apply a [workspace edit](#WorkspaceEdit).
+         *
+         * *Note:* This function can only be called during event dispatch and not
+         * in an asynchronous manner:
+         *
+         * ```ts
+         * workspace.onWillCreateFiles(event => {
+         *     // async, will *throw* an error
+         *     setTimeout(() => event.waitUntil(promise));
+         *
+         *     // sync, OK
+         *     event.waitUntil(promise);
+         * })
+         * ```
+         *
+         * @param thenable A thenable that delays saving.
+         */
+        waitUntil(thenable: Thenable<WorkspaceEdit>): void;
+
+        /**
+         * Allows to pause the event until the provided thenable resolves.
+         *
+         * *Note:* This function can only be called during event dispatch.
+         *
+         * @param thenable A thenable that delays saving.
+         */
+        waitUntil(thenable: Thenable<any>): void;
+    }
+
+    /**
+     * An event that is fired after files are created.
+     */
+    export interface FileCreateEvent {
+
+        /**
+         * The files that got created.
+         */
+        readonly files: ReadonlyArray<Uri>;
+    }
+
+    /**
+     * An event that is fired when files are going to be deleted.
+     *
+     * To make modifications to the workspace before the files are deleted,
+     * call the [`waitUntil](#FileWillCreateEvent.waitUntil)-function with a
+     * thenable that resolves to a [workspace edit](#WorkspaceEdit).
+     */
+    export interface FileWillDeleteEvent {
+
+        /**
+         * The files that are going to be deleted.
+         */
+        readonly files: ReadonlyArray<Uri>;
+
+        /**
+         * Allows to pause the event and to apply a [workspace edit](#WorkspaceEdit).
+         *
+         * *Note:* This function can only be called during event dispatch and not
+         * in an asynchronous manner:
+         *
+         * ```ts
+         * workspace.onWillCreateFiles(event => {
+         *     // async, will *throw* an error
+         *     setTimeout(() => event.waitUntil(promise));
+         *
+         *     // sync, OK
+         *     event.waitUntil(promise);
+         * })
+         * ```
+         *
+         * @param thenable A thenable that delays saving.
+         */
+        waitUntil(thenable: Thenable<WorkspaceEdit>): void;
+
+        /**
+         * Allows to pause the event until the provided thenable resolves.
+         *
+         * *Note:* This function can only be called during event dispatch.
+         *
+         * @param thenable A thenable that delays saving.
+         */
+        waitUntil(thenable: Thenable<any>): void;
+    }
+
+    /**
+     * An event that is fired after files are deleted.
+     */
+    export interface FileDeleteEvent {
+
+        /**
+         * The files that got deleted.
+         */
+        readonly files: ReadonlyArray<Uri>;
+    }
+
+    /**
+     * An event that is fired when files are going to be renamed.
+     *
+     * To make modifications to the workspace before the files are renamed,
+     * call the [`waitUntil](#FileWillCreateEvent.waitUntil)-function with a
+     * thenable that resolves to a [workspace edit](#WorkspaceEdit).
+     */
+    export interface FileWillRenameEvent {
+
+        /**
+         * The files that are going to be renamed.
+         */
+        readonly files: ReadonlyArray<{ oldUri: Uri, newUri: Uri }>;
+
+        /**
+         * Allows to pause the event and to apply a [workspace edit](#WorkspaceEdit).
+         *
+         * *Note:* This function can only be called during event dispatch and not
+         * in an asynchronous manner:
+         *
+         * ```ts
+         * workspace.onWillCreateFiles(event => {
+         *     // async, will *throw* an error
+         *     setTimeout(() => event.waitUntil(promise));
+         *
+         *     // sync, OK
+         *     event.waitUntil(promise);
+         * })
+         * ```
+         *
+         * @param thenable A thenable that delays saving.
+         */
+        waitUntil(thenable: Thenable<WorkspaceEdit>): void;
+
+        /**
+         * Allows to pause the event until the provided thenable resolves.
+         *
+         * *Note:* This function can only be called during event dispatch.
+         *
+         * @param thenable A thenable that delays saving.
+         */
+        waitUntil(thenable: Thenable<any>): void;
+    }
+
+    /**
+     * An event that is fired after files are renamed.
+     */
+    export interface FileRenameEvent {
+
+        /**
+         * The files that got renamed.
+         */
+        readonly files: ReadonlyArray<{ oldUri: Uri, newUri: Uri }>;
+    }
 
     /**
      * Namespace for dealing with the current workspace. A workspace is the representation
@@ -3235,6 +4873,25 @@ declare module '@theia/plugin' {
      * the editor-process so that they should be always used instead of nodejs-equivalents.
      */
     export namespace workspace {
+
+        /**
+         * A [file system](#FileSystem) instance that allows to interact with local and remote
+         * files, e.g. `workspace.fs.readDirectory(someUri)` allows to retrieve all entries
+         * of a directory or `workspace.fs.stat(anotherUri)` returns the meta data for a
+         * file.
+         */
+        export const fs: FileSystem;
+
+        /**
+         * ~~The folder that is open in the editor. `undefined` when no folder
+         * has been opened.~~
+         *
+         * @deprecated Use [`workspaceFolders`](#workspace.workspaceFolders) instead.
+         *
+         * @readonly
+         */
+        export let rootPath: string | undefined;
+
         /**
          * List of workspace folders or `undefined` when no folder is open.
          * *Note* that the first entry corresponds to the value of `rootPath`.
@@ -3263,15 +4920,15 @@ declare module '@theia/plugin' {
          */
         export let textDocuments: TextDocument[];
 
-		/**
-		 * Register a text document content provider.
-		 *
-		 * Only one provider can be registered per scheme.
-		 *
-		 * @param scheme The uri-scheme to register for.
-		 * @param provider A content provider.
-		 * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
-		 */
+        /**
+         * Register a text document content provider.
+         *
+         * Only one provider can be registered per scheme.
+         *
+         * @param scheme The uri-scheme to register for.
+         * @param provider A content provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
         export function registerTextDocumentContentProvider(scheme: string, provider: TextDocumentContentProvider): Disposable;
 
         /**
@@ -3304,9 +4961,94 @@ declare module '@theia/plugin' {
         export const onDidChangeTextDocument: Event<TextDocumentChangeEvent>;
 
         /**
+         * An event that is emitted when a [text document](#TextDocument) will be saved to disk.
+         *
+         * *Note 1:* Subscribers can delay saving by registering asynchronous work. For the sake of data integrity the editor
+         * might save without firing this event. For instance when shutting down with dirty files.
+         *
+         * *Note 2:* Subscribers are called sequentially and they can [delay](#TextDocumentWillSaveEvent.waitUntil) saving
+         * by registering asynchronous work. Protection against misbehaving listeners is implemented as such:
+         *  * there is an overall time budget that all listeners share and if that is exhausted no further listener is called
+         *  * listeners that take a long time or produce errors frequently will not be called anymore
+         *
+         * The current thresholds are 1.5 seconds as overall time budget and a listener can misbehave 3 times before being ignored.
+         */
+        export const onWillSaveTextDocument: Event<TextDocumentWillSaveEvent>;
+
+        /**
          * An event that is emitted when a [text document](#TextDocument) is saved to disk.
          */
         export const onDidSaveTextDocument: Event<TextDocument>;
+
+        /**
+         * An event that is emitted when files are being created.
+         *
+         * *Note 1:* This event is triggered by user gestures, like creating a file from the
+         * explorer, or from the [`workspace.applyEdit`](#workspace.applyEdit)-api. This event is *not* fired when
+         * files change on disk, e.g triggered by another application, or when using the
+         * [`workspace.fs`](#FileSystem)-api.
+         *
+         * *Note 2:* When this event is fired, edits to files thare are being created cannot be applied.
+         */
+        export const onWillCreateFiles: Event<FileWillCreateEvent>;
+
+        /**
+         * An event that is emitted when files have been created.
+         *
+         * *Note:* This event is triggered by user gestures, like creating a file from the
+         * explorer, or from the [`workspace.applyEdit`](#workspace.applyEdit)-api, but this event is *not* fired when
+         * files change on disk, e.g triggered by another application, or when using the
+         * [`workspace.fs`](#FileSystem)-api.
+         */
+        export const onDidCreateFiles: Event<FileCreateEvent>;
+
+        /**
+         * An event that is emitted when files are being deleted.
+         *
+         * *Note 1:* This event is triggered by user gestures, like deleting a file from the
+         * explorer, or from the [`workspace.applyEdit`](#workspace.applyEdit)-api, but this event is *not* fired when
+         * files change on disk, e.g triggered by another application, or when using the
+         * [`workspace.fs`](#FileSystem)-api.
+         *
+         * *Note 2:* When deleting a folder with children only one event is fired.
+         */
+        export const onWillDeleteFiles: Event<FileWillDeleteEvent>;
+
+        /**
+         * An event that is emitted when files have been deleted.
+         *
+         * *Note 1:* This event is triggered by user gestures, like deleting a file from the
+         * explorer, or from the [`workspace.applyEdit`](#workspace.applyEdit)-api, but this event is *not* fired when
+         * files change on disk, e.g triggered by another application, or when using the
+         * [`workspace.fs`](#FileSystem)-api.
+         *
+         * *Note 2:* When deleting a folder with children only one event is fired.
+         */
+        export const onDidDeleteFiles: Event<FileDeleteEvent>;
+
+        /**
+         * An event that is emitted when files are being renamed.
+         *
+         * *Note 1:* This event is triggered by user gestures, like renaming a file from the
+         * explorer, and from the [`workspace.applyEdit`](#workspace.applyEdit)-api, but this event is *not* fired when
+         * files change on disk, e.g triggered by another application, or when using the
+         * [`workspace.fs`](#FileSystem)-api.
+         *
+         * *Note 2:* When renaming a folder with children only one event is fired.
+         */
+        export const onWillRenameFiles: Event<FileWillRenameEvent>;
+
+        /**
+         * An event that is emitted when files have been renamed.
+         *
+         * *Note 1:* This event is triggered by user gestures, like renaming a file from the
+         * explorer, and from the [`workspace.applyEdit`](#workspace.applyEdit)-api, but this event is *not* fired when
+         * files change on disk, e.g triggered by another application, or when using the
+         * [`workspace.fs`](#FileSystem)-api.
+         *
+         * *Note 2:* When renaming a folder with children only one event is fired.
+         */
+        export const onDidRenameFiles: Event<FileRenameEvent>;
 
         /**
          * Opens a document. Will return early if this document is already open. Otherwise
@@ -3325,7 +5067,7 @@ declare module '@theia/plugin' {
          * @param uri Identifies the resource to open.
          * @return A promise that resolves to a [document](#TextDocument).
          */
-        export function openTextDocument(uri: Uri): Promise<TextDocument | undefined>;
+        export function openTextDocument(uri: Uri): PromiseLike<TextDocument | undefined>;
 
         /**
          * A short-hand for `openTextDocument(Uri.file(fileName))`.
@@ -3334,7 +5076,7 @@ declare module '@theia/plugin' {
          * @param fileName A name of a file on disk.
          * @return A promise that resolves to a [document](#TextDocument).
          */
-        export function openTextDocument(fileName: string): Promise<TextDocument | undefined>;
+        export function openTextDocument(fileName: string): PromiseLike<TextDocument | undefined>;
 
         /**
          * Opens an untitled text document. The editor will prompt the user for a file
@@ -3344,18 +5086,7 @@ declare module '@theia/plugin' {
          * @param options Options to control how the document will be created.
          * @return A promise that resolves to a [document](#TextDocument).
          */
-        export function openTextDocument(options?: { language?: string; content?: string; }): Promise<TextDocument | undefined>;
-
-        /**
-         * Register a text document content provider.
-         *
-         * Only one provider can be registered per scheme.
-         *
-         * @param scheme The uri-scheme to register for.
-         * @param provider A content provider.
-         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
-         */
-        export function registerTextDocumentContentProvider(scheme: string, provider: TextDocumentContentProvider): Disposable;
+        export function openTextDocument(options?: { language?: string; content?: string; }): PromiseLike<TextDocument | undefined>;
 
         /**
          * Get a workspace configuration object.
@@ -3414,20 +5145,133 @@ declare module '@theia/plugin' {
          * @return A thenable that resolves to an array of resource identifiers. Will return no results if no
          * [workspace folders](#workspace.workspaceFolders) are opened.
          */
-        export function findFiles(include: GlobPattern, exclude?: GlobPattern | undefined, maxResults?: number, token?: CancellationToken): PromiseLike<Uri[]>;
+        export function findFiles(include: GlobPattern, exclude?: GlobPattern | null, maxResults?: number, token?: CancellationToken): PromiseLike<Uri[]>;
 
-		/**
-		 * Register a filesystem provider for a given scheme, e.g. `ftp`.
-		 *
-		 * There can only be one provider per scheme and an error is being thrown when a scheme
-		 * has been claimed by another provider or when it is reserved.
-		 *
-		 * @param scheme The uri-[scheme](#Uri.scheme) the provider registers for.
-		 * @param provider The filesystem provider.
-		 * @param options Immutable metadata about the provider.
-		 * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
-		 */
-		export function registerFileSystemProvider(scheme: string, provider: FileSystemProvider, options?: { isCaseSensitive?: boolean, isReadonly?: boolean }): Disposable;
+        /**
+         * Find text in files across all [workspace folders] in the workspace
+         * @param query What to search 
+         * @param optionsOrCallback 
+         * @param callbackOrToken 
+         * @param token 
+         */
+        export function findTextInFiles(query: TextSearchQuery, optionsOrCallback: FindTextInFilesOptions | ((result: TextSearchResult) => void),
+            callbackOrToken?: CancellationToken | ((result: TextSearchResult) => void), token?: CancellationToken): Promise<TextSearchComplete>
+
+        /**
+         * Save all dirty files.
+         *
+         * @param includeUntitled Also save files that have been created during this session.
+         * @return A thenable that resolves when the files have been saved.
+         */
+        export function saveAll(includeUntitled?: boolean): PromiseLike<boolean>;
+
+        /**
+         * Make changes to one or many resources or create, delete, and rename resources as defined by the given
+         * [workspace edit](#WorkspaceEdit).
+         *
+         * All changes of a workspace edit are applied in the same order in which they have been added. If
+         * multiple textual inserts are made at the same position, these strings appear in the resulting text
+         * in the order the 'inserts' were made. Invalid sequences like 'delete file a' -> 'insert text in file a'
+         * cause failure of the operation.
+         *
+         * When applying a workspace edit that consists only of text edits an 'all-or-nothing'-strategy is used.
+         * A workspace edit with resource creations or deletions aborts the operation, e.g. consective edits will
+         * not be attempted, when a single edit fails.
+         *
+         * @param edit A workspace edit.
+         * @return A thenable that resolves when the edit could be applied.
+         */
+        export function applyEdit(edit: WorkspaceEdit): PromiseLike<boolean>;
+
+        /**
+         * Register a filesystem provider for a given scheme, e.g. `ftp`.
+         *
+         * There can only be one provider per scheme and an error is being thrown when a scheme
+         * has been claimed by another provider or when it is reserved.
+         *
+         * @param scheme The uri-[scheme](#Uri.scheme) the provider registers for.
+         * @param provider The filesystem provider.
+         * @param options Immutable metadata about the provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerFileSystemProvider(scheme: string, provider: FileSystemProvider, options?: { isCaseSensitive?: boolean, isReadonly?: boolean }): Disposable;
+
+        /**
+         * Returns the [workspace folder](#WorkspaceFolder) that contains a given uri.
+         * * returns `undefined` when the given uri doesn't match any workspace folder
+         *
+         * @param uri An uri.
+         * @return A workspace folder or `undefined`
+         */
+        export function getWorkspaceFolder(uri: Uri): WorkspaceFolder | undefined;
+
+        /**
+         * Returns a path that is relative to the workspace folder or folders.
+         *
+         * When there are no [workspace folders](#workspace.workspaceFolders) or when the path
+         * is not contained in them, the input is returned.
+         *
+         * @param pathOrUri A path or uri. When a uri is given its [fsPath](#Uri.fsPath) is used.
+         * @param includeWorkspaceFolder When `true` and when the given path is contained inside a
+         * workspace folder the name of the workspace is prepended. Defaults to `true` when there are
+         * multiple workspace folders and `false` otherwise.
+         * @return A path relative to the root or the input.
+         */
+        export function asRelativePath(pathOrUri: string | Uri, includeWorkspaceFolder?: boolean): string | undefined;
+
+        /**
+         * This method replaces `deleteCount` [workspace folders](#workspace.workspaceFolders) starting at index `start`
+         * by an optional set of `workspaceFoldersToAdd` on the `theia.workspace.workspaceFolders` array. This "splice"
+         * behavior can be used to add, remove and change workspace folders in a single operation.
+         *
+         * If the first workspace folder is added, removed or changed, the currently executing extensions (including the
+         * one that called this method) will be terminated and restarted so that the (deprecated) `rootPath` property is
+         * updated to point to the first workspace folder.
+         *
+         * Use the [`onDidChangeWorkspaceFolders()`](#onDidChangeWorkspaceFolders) event to get notified when the
+         * workspace folders have been updated.
+         *
+         * **Example:** adding a new workspace folder at the end of workspace folders
+         * ```typescript
+         * workspace.updateWorkspaceFolders(workspace.workspaceFolders ? workspace.workspaceFolders.length : 0, null, { uri: ...});
+         * ```
+         *
+         * **Example:** removing the first workspace folder
+         * ```typescript
+         * workspace.updateWorkspaceFolders(0, 1);
+         * ```
+         *
+         * **Example:** replacing an existing workspace folder with a new one
+         * ```typescript
+         * workspace.updateWorkspaceFolders(0, 1, { uri: ...});
+         * ```
+         *
+         * It is valid to remove an existing workspace folder and add it again with a different name
+         * to rename that folder.
+         *
+         * **Note:** it is not valid to call [updateWorkspaceFolders()](#updateWorkspaceFolders) multiple times
+         * without waiting for the [`onDidChangeWorkspaceFolders()`](#onDidChangeWorkspaceFolders) to fire.
+         *
+         * @param start the zero-based location in the list of currently opened [workspace folders](#WorkspaceFolder)
+         * from which to start deleting workspace folders.
+         * @param deleteCount the optional number of workspace folders to remove.
+         * @param workspaceFoldersToAdd the optional variable set of workspace folders to add in place of the deleted ones.
+         * Each workspace is identified with a mandatory URI and an optional name.
+         * @return true if the operation was successfully started and false otherwise if arguments were used that would result
+         * in invalid workspace folder state (e.g. 2 folders with the same URI).
+         */
+        export function updateWorkspaceFolders(start: number, deleteCount: number | undefined | null, ...workspaceFoldersToAdd: { uri: Uri, name?: string }[]): boolean;
+
+        /**
+        * ~~Register a task provider.~~
+        *
+        * @deprecated Use the corresponding function on the `tasks` namespace instead
+        *
+        * @param type The task kind type this provider is registered for.
+        * @param provider A task provider.
+        * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+        */
+        export function registerTaskProvider(type: string, provider: TaskProvider): Disposable;
     }
 
     export namespace env {
@@ -3451,6 +5295,89 @@ declare module '@theia/plugin' {
          * Returns all query parameters of current IDE.
          */
         export function getQueryParameters(): { [key: string]: string | string[] } | undefined;
+
+        /**
+         * The application name of the editor, like 'Eclipse Theia'.
+         */
+        export const appName: string;
+
+        /**
+         * The application root folder from which the editor is running.
+         */
+        export const appRoot: string;
+
+        /**
+         * The custom uri scheme the editor registers to in the operating system.
+         */
+        export const uriScheme: string;
+
+        /**
+         * Represents the preferred user-language, like `de-CH`, `fr`, or `en-US`.
+         */
+        export const language: string;
+
+        /**
+         * The detected default shell for the extension host.
+         */
+        export const shell: string;
+
+        /**
+        * The UI kind property indicates from which UI extensions
+        * are accessed from. For example, extensions could be accessed
+        * from a desktop application or a web browser.
+        */
+        export const uiKind: UIKind;
+
+        /**
+         * The system clipboard.
+         */
+        export const clipboard: Clipboard;
+
+        /**
+         * A unique identifier for the computer.
+         */
+        export const machineId: string;
+
+        /**
+         * A unique identifier for the current session.
+         * Changes each time the editor is started.
+         */
+        export const sessionId: string;
+
+        /**
+         * Opens an *external* item, e.g. a http(s) or mailto-link, using the
+         * default application.
+         *
+         * *Note* that [`showTextDocument`](#window.showTextDocument) is the right
+         * way to open a text document inside the editor, not this function.
+         *
+         * @param target The uri that should be opened.
+         * @returns A promise indicating if open was successful.
+         */
+        export function openExternal(target: Uri): PromiseLike<boolean>;
+
+        /**
+         * Resolves an *external* uri, such as a `http:` or `https:` link, from where the extension is running to a
+         * uri to the same resource on the client machine.
+         *
+         * This is a no-op if the extension is running on the client machine. Currently only supports
+         * `https:` and `http:` uris.
+         *
+         * If the extension is running remotely, this function automatically establishes a port forwarding tunnel
+         * from the local machine to `target` on the remote and returns a local uri to the tunnel. The lifetime of
+         * the port fowarding tunnel is managed by VS Code and the tunnel can be closed by the user.
+         *
+         * Extensions should not cache the result of `asExternalUri` as the resolved uri may become invalid due to
+         * a system or user action — for example, in remote cases, a user may close a port forwardng tunnel
+         * that was opened by `asExternalUri`.
+         *
+         * *Note* that uris passed through `openExternal` are automatically resolved and you should not call `asExternalUri`
+         * on them.
+         *
+         * @return A uri that can be used on the client machine.
+         */
+        export function asExternalUri(target: Uri): PromiseLike<Uri>;
+
     }
 
     /**
@@ -3686,7 +5613,7 @@ declare module '@theia/plugin' {
          * The label of this signature. Will be shown in
          * the UI.
          */
-        label: string;
+        label: string | [number, number];
 
         /**
          * The human-readable doc-comment of this signature. Will be shown
@@ -3697,10 +5624,11 @@ declare module '@theia/plugin' {
         /**
          * Creates a new parameter information object.
          *
-         * @param label A label string.
+         * @param label A label string or inclusive start and exclusive end offsets within its containing signature label.
          * @param documentation A doc string.
          */
-        constructor(label: string, documentation?: string | MarkdownString);
+        constructor(label: string | [number, number], documentation?: string | MarkdownString);
+
     }
 
     /**
@@ -3760,6 +5688,61 @@ declare module '@theia/plugin' {
     }
 
     /**
+     * How a [`SignatureHelpProvider`](#SignatureHelpProvider) was triggered.
+     */
+    export enum SignatureHelpTriggerKind {
+        /**
+         * Signature help was invoked manually by the user or by a command.
+         */
+        Invoke = 1,
+
+        /**
+         * Signature help was triggered by a trigger character.
+         */
+        TriggerCharacter = 2,
+
+        /**
+         * Signature help was triggered by the cursor moving or by the document content changing.
+         */
+        ContentChange = 3,
+    }
+
+    /**
+     * Additional information about the context in which a
+     * [`SignatureHelpProvider`](#SignatureHelpProvider.provideSignatureHelp) was triggered.
+     */
+    export interface SignatureHelpContext {
+        /**
+         * Action that caused signature help to be triggered.
+         */
+        readonly triggerKind: SignatureHelpTriggerKind;
+
+        /**
+         * Character that caused signature help to be triggered.
+         *
+         * This is `undefined` when signature help is not triggered by typing, such as when manually invoking
+         * signature help or when moving the cursor.
+         */
+        readonly triggerCharacter?: string;
+
+        /**
+         * `true` if signature help was already showing when it was triggered.
+         *
+         * Retriggers occur when the signature help is already active and can be caused by actions such as
+         * typing a trigger character, a cursor move, or document content changes.
+         */
+        readonly isRetrigger: boolean;
+
+        /**
+         * The currently active [`SignatureHelp`](#SignatureHelp).
+         *
+         * The `activeSignatureHelp` has its [`SignatureHelp.activeSignature`] field updated based on
+         * the user arrowing through available signatures.
+         */
+        readonly activeSignatureHelp?: SignatureHelp;
+    }
+
+    /**
      * The signature help provider interface defines the contract between extensions and
      * the [parameter hints](https://code.visualstudio.com/docs/editor/intellisense)-feature.
      */
@@ -3771,10 +5754,30 @@ declare module '@theia/plugin' {
          * @param document The document in which the command was invoked.
          * @param position The position at which the command was invoked.
          * @param token A cancellation token.
+         * @param context Information about how signature help was triggered.
+         *
          * @return Signature help or a thenable that resolves to such. The lack of a result can be
          * signaled by returning `undefined` or `null`.
          */
-        provideSignatureHelp(document: TextDocument, position: Position, token: CancellationToken | undefined): ProviderResult<SignatureHelp>;
+        provideSignatureHelp(document: TextDocument, position: Position, token: CancellationToken, context: SignatureHelpContext): ProviderResult<SignatureHelp>;
+    }
+
+    /**
+     * Metadata about a registered [`SignatureHelpProvider`](#SignatureHelpProvider).
+     */
+    export interface SignatureHelpProviderMetadata {
+        /**
+         * List of characters that trigger signature help.
+         */
+        readonly triggerCharacters: ReadonlyArray<string>;
+
+        /**
+         * List of characters that re-trigger signature help.
+         *
+         * These trigger characters are only active when signature help is already showing. All trigger characters
+         * are also counted as re-trigger characters.
+         */
+        readonly retriggerCharacters: ReadonlyArray<string>;
     }
 
     /**
@@ -3824,7 +5827,6 @@ declare module '@theia/plugin' {
      */
     export type ProviderResult<T> = T | undefined | PromiseLike<T | undefined>;
 
-
     /**
      * A symbol kind.
      */
@@ -3857,6 +5859,10 @@ declare module '@theia/plugin' {
         TypeParameter = 25
     }
 
+    export enum SymbolTag {
+        Deprecated = 1
+    }
+
     /**
      * Represents information about programming constructs like variables, classes,
      * interfaces etc.
@@ -3877,6 +5883,8 @@ declare module '@theia/plugin' {
          * The kind of this symbol.
          */
         kind: SymbolKind;
+
+        tags?: ReadonlyArray<SymbolTag>;
 
         /**
          * The location of this symbol.
@@ -3908,10 +5916,10 @@ declare module '@theia/plugin' {
     }
 
     /**
-    * Represents programming constructs like variables, classes, interfaces etc. that appear in a document. Document
-    * symbols can be hierarchical and they have two ranges: one that encloses its definition and one that points to
-    * its most interesting range, e.g. the range of an identifier.
-    */
+     * Represents programming constructs like variables, classes, interfaces etc. that appear in a document. Document
+     * symbols can be hierarchical and they have two ranges: one that encloses its definition and one that points to
+     * its most interesting range, e.g. the range of an identifier.
+     */
     export class DocumentSymbol {
 
         /**
@@ -3928,6 +5936,8 @@ declare module '@theia/plugin' {
          * The kind of this symbol.
          */
         kind: SymbolKind;
+
+        tags?: ReadonlyArray<SymbolTag>;
 
         /**
          * The range enclosing this symbol not including leading/trailing whitespace but everything else, e.g comments and code.
@@ -3972,6 +5982,211 @@ declare module '@theia/plugin' {
          * signaled by returning `undefined`, `null`, or an empty array.
          */
         provideDocumentSymbols(document: TextDocument, token: CancellationToken): ProviderResult<SymbolInformation[] | DocumentSymbol[]>;
+    }
+
+    /**
+    * Represents a color in RGBA space.
+    */
+    export class Color {
+
+        /**
+        * The red component of this color in the range [0-1].
+        */
+        readonly red: number;
+
+        /**
+        * The green component of this color in the range [0-1].
+        */
+        readonly green: number;
+
+        /**
+        * The blue component of this color in the range [0-1].
+        */
+        readonly blue: number;
+
+        /**
+        * The alpha component of this color in the range [0-1].
+        */
+        readonly alpha: number;
+
+        /**
+        * Creates a new color instance.
+        *
+        * @param red The red component.
+        * @param green The green component.
+        * @param blue The blue component.
+        * @param alpha The alpha component.
+        */
+        constructor(red: number, green: number, blue: number, alpha: number);
+    }
+
+    /**
+    * Represents a color range from a document.
+    */
+    export class ColorInformation {
+
+        /**
+        * The range in the document where this color appears.
+        */
+        range: Range;
+
+        /**
+        * The actual color value for this color range.
+        */
+        color: Color;
+
+        /**
+        * Creates a new color range.
+        *
+        * @param range The range the color appears in. Must not be empty.
+        * @param color The value of the color.
+        */
+        constructor(range: Range, color: Color);
+    }
+
+    /**
+    * A color presentation object describes how a [`color`](#Color) should be represented as text and what
+    * edits are required to refer to it from source code.
+    *
+    * For some languages one color can have multiple presentations, e.g. css can represent the color red with
+    * the constant `Red`, the hex-value `#ff0000`, or in rgba and hsla forms. In csharp other representations
+    * apply, e.g `System.Drawing.Color.Red`.
+    */
+    export class ColorPresentation {
+
+        /**
+        * The label of this color presentation. It will be shown on the color
+        * picker header. By default this is also the text that is inserted when selecting
+        * this color presentation.
+        */
+        label: string;
+
+        /**
+        * An [edit](#TextEdit) which is applied to a document when selecting
+        * this presentation for the color.  When `falsy` the [label](#ColorPresentation.label)
+        * is used.
+        */
+        textEdit?: TextEdit;
+
+        /**
+        * An optional array of additional [text edits](#TextEdit) that are applied when
+        * selecting this color presentation. Edits must not overlap with the main [edit](#ColorPresentation.textEdit) nor with themselves.
+        */
+        additionalTextEdits?: TextEdit[];
+
+        /**
+        * Creates a new color presentation.
+        *
+        * @param label The label of this color presentation.
+        */
+        constructor(label: string);
+    }
+
+    /**
+    * The document color provider defines the contract between extensions and feature of
+    * picking and modifying colors in the editor.
+    */
+    export interface DocumentColorProvider {
+
+        /**
+        * Provide colors for the given document.
+        *
+        * @param document The document in which the command was invoked.
+        * @param token A cancellation token.
+        * @return An array of [color information](#ColorInformation) or a thenable that resolves to such. The lack of a result
+        * can be signaled by returning `undefined`, `null`, or an empty array.
+        */
+        provideDocumentColors(document: TextDocument, token: CancellationToken): ProviderResult<ColorInformation[]>;
+
+        /**
+        * Provide [representations](#ColorPresentation) for a color.
+        *
+        * @param color The color to show and insert.
+        * @param context A context object with additional information
+        * @param token A cancellation token.
+        * @return An array of color presentations or a thenable that resolves to such. The lack of a result
+        * can be signaled by returning `undefined`, `null`, or an empty array.
+        */
+        provideColorPresentations(color: Color, context: { document: TextDocument, range: Range }, token: CancellationToken): ProviderResult<ColorPresentation[]>;
+    }
+
+    /**
+    * A line based folding range. To be valid, start and end line must a zero or larger and smaller than the number of lines in the document.
+    * Invalid ranges will be ignored.
+    */
+    export class FoldingRange {
+
+        /**
+        * The zero-based start line of the range to fold. The folded area starts after the line's last character.
+        * To be valid, the end must be zero or larger and smaller than the number of lines in the document.
+        */
+        start: number;
+
+        /**
+        * The zero-based end line of the range to fold. The folded area ends with the line's last character.
+        * To be valid, the end must be zero or larger and smaller than the number of lines in the document.
+        */
+        end: number;
+
+        /**
+        * Describes the [Kind](#FoldingRangeKind) of the folding range such as [Comment](#FoldingRangeKind.Comment) or
+        * [Region](#FoldingRangeKind.Region). The kind is used to categorize folding ranges and used by commands
+        * like 'Fold all comments'. See
+        * [FoldingRangeKind](#FoldingRangeKind) for an enumeration of all kinds.
+        * If not set, the range is originated from a syntax element.
+        */
+        kind?: FoldingRangeKind;
+
+        /**
+        * Creates a new folding range.
+        *
+        * @param start The start line of the folded range.
+        * @param end The end line of the folded range.
+        * @param kind The kind of the folding range.
+        */
+        constructor(start: number, end: number, kind?: FoldingRangeKind);
+    }
+
+    /**
+    * An enumeration of specific folding range kinds. The kind is an optional field of a [FoldingRange](#FoldingRange)
+    * and is used to distinguish specific folding ranges such as ranges originated from comments. The kind is used by commands like
+    * `Fold all comments` or `Fold all regions`.
+    * If the kind is not set on the range, the range originated from a syntax element other than comments, imports or region markers.
+    */
+    export enum FoldingRangeKind {
+        /**
+        * Kind for folding range representing a comment.
+        */
+        Comment = 1,
+        /**
+        * Kind for folding range representing a import.
+        */
+        Imports = 2,
+        /**
+        * Kind for folding range representing regions originating from folding markers like `#region` and `#endregion`.
+        */
+        Region = 3
+    }
+
+    /**
+    * Folding context (for future use)
+    */
+    export interface FoldingContext {
+    }
+
+    /**
+    * The folding range provider interface defines the contract between extensions and
+    * [Folding](https://code.visualstudio.com/docs/editor/codebasics#_folding) in the editor.
+    */
+    export interface FoldingRangeProvider {
+        /**
+        * Returns a list of folding ranges or null and undefined if the provider
+        * does not want to participate or was cancelled.
+        * @param document The document in which the command was invoked.
+        * @param context Additional context information (for future use)
+        * @param token A cancellation token.
+        */
+        provideFoldingRanges(document: TextDocument, context: FoldingContext, token: CancellationToken): ProviderResult<FoldingRange[]>;
     }
 
     /**
@@ -4112,7 +6327,7 @@ declare module '@theia/plugin' {
      * the given [edit](#CompletionItem.textEdit) is used.
      *
      * When selecting a completion item in the editor its defined or synthesized text edit will be applied
-     * to *all* cursors/selections whereas [additionalTextEdits](CompletionItem.additionalTextEdits) will be
+     * to *all* cursors/selections whereas [additionalTextEdits](#additionalTextEdits) will be
      * applied as provided.
      *
      * @see [CompletionItemProvider.provideCompletionItems](#CompletionItemProvider.provideCompletionItems)
@@ -4173,15 +6388,17 @@ declare module '@theia/plugin' {
         insertText?: string | SnippetString;
 
         /**
-         * A range of text that should be replaced by this completion item.
-         *
-         * Defaults to a range from the start of the [current word](#TextDocument.getWordRangeAtPosition) to the
-         * current position.
-         *
-         * *Note:* The range must be a [single line](#Range.isSingleLine) and it must
-         * [contain](#Range.contains) the position at which completion has been [requested](#CompletionItemProvider.provideCompletionItems).
-         */
-        range?: Range;
+		 * A range or a insert and replace range selecting the text that should be replaced by this completion item.
+		 *
+		 * When omitted, the range of the [current word](#TextDocument.getWordRangeAtPosition) is used as replace-range
+		 * and as insert-range the start of the [current word](#TextDocument.getWordRangeAtPosition) to the
+		 * current position is used.
+		 *
+		 * *Note 1:* A range must be a [single line](#Range.isSingleLine) and it must
+		 * [contain](#Range.contains) the position at which completion has been [requested](#CompletionItemProvider.provideCompletionItems).
+		 * *Note 2:* A insert range must be a prefix of a replace range, that means it must be contained and starting at the same position.
+		 */
+        range?: Range | { inserting: Range; replacing: Range; };
 
         /**
          * An optional set of characters that when pressed while this completion is active will accept it first and
@@ -4189,6 +6406,13 @@ declare module '@theia/plugin' {
          * characters will be ignored.
          */
         commitCharacters?: string[];
+
+        /**
+         * Keep whitespace of the [insertText](#CompletionItem.insertText) as is. By default, the editor adjusts leading
+         * whitespace of new lines so that they match the indentation of the line for which the item is accepted - setting
+         * this to `true` will prevent that.
+         */
+        keepWhitespace?: boolean;
 
         /**
          * An optional array of additional [text edits](#TextEdit) that are applied when
@@ -4200,9 +6424,21 @@ declare module '@theia/plugin' {
         /**
          * An optional [command](#Command) that is executed *after* inserting this completion. *Note* that
          * additional modifications to the current document should be described with the
-         * [additionalTextEdits](#CompletionItem.additionalTextEdits)-property.
+         * [additionalTextEdits](#additionalTextEdits)-property.
          */
         command?: Command;
+
+        /**
+         * @deprecated Use `CompletionItem.insertText` and `CompletionItem.range` instead.
+         *
+         * ~~An [edit](#TextEdit) which is applied to a document when selecting
+         * this completion. When an edit is provided the value of
+         * [insertText](#CompletionItem.insertText) is ignored.~~
+         *
+         * ~~The [range](#Range) of the edit must be single-line and on the same
+         * line completions were [requested](#CompletionItemProvider.provideCompletionItems) at.~~
+         */
+        textEdit?: TextEdit;
 
         /**
          * Creates a new completion item.
@@ -4529,7 +6765,7 @@ declare module '@theia/plugin' {
      * A code action represents a change that can be performed in code, e.g. to fix a problem or
      * to refactor code.
      *
-     * A CodeAction must set either [`edit`](CodeAction#edit) and/or a [`command`](CodeAction#command).
+     * A CodeAction must set either [`edit`](#edit) and/or a [`command`](#command).
      * If both are supplied, the `edit` is applied first, then the command is executed.
      */
     export class CodeAction {
@@ -4649,33 +6885,33 @@ declare module '@theia/plugin' {
     }
 
     /**
-	 * A code lens provider adds [commands](#Command) to source text. The commands will be shown
-	 * as dedicated horizontal lines in between the source text.
-	 */
+     * A code lens provider adds [commands](#Command) to source text. The commands will be shown
+     * as dedicated horizontal lines in between the source text.
+     */
     export interface CodeLensProvider {
         /**
-        * An optional event to signal that the code lenses from this provider have changed.
-        */
+         * An optional event to signal that the code lenses from this provider have changed.
+         */
         onDidChangeCodeLenses?: Event<void>;
         /**
-        * Compute a list of [lenses](#CodeLens). This call should return as fast as possible and if
-        * computing the commands is expensive implementors should only return code lens objects with the
-        * range set and implement [resolve](#CodeLensProvider.resolveCodeLens).
-        *
-        * @param document The document in which the command was invoked.
-        * @param token A cancellation token.
-        * @return An array of code lenses or a thenable that resolves to such. The lack of a result can be
-        * signaled by returning `undefined`, `null`, or an empty array.
-        */
+         * Compute a list of [lenses](#CodeLens). This call should return as fast as possible and if
+         * computing the commands is expensive implementors should only return code lens objects with the
+         * range set and implement [resolve](#CodeLensProvider.resolveCodeLens).
+         *
+         * @param document The document in which the command was invoked.
+         * @param token A cancellation token.
+         * @return An array of code lenses or a thenable that resolves to such. The lack of a result can be
+         * signaled by returning `undefined`, `null`, or an empty array.
+         */
         provideCodeLenses(document: TextDocument, token: CancellationToken): ProviderResult<CodeLens[]>;
         /**
-        * This function will be called for each visible code lens, usually when scrolling and after
-        * calls to [compute](#CodeLensProvider.provideCodeLenses)-lenses.
-        *
-        * @param codeLens code lens that must be resolved.
-        * @param token A cancellation token.
-        * @return The given, resolved code lens or thenable that resolves to such.
-        */
+         * This function will be called for each visible code lens, usually when scrolling and after
+         * calls to [compute](#CodeLensProvider.provideCodeLenses)-lenses.
+         *
+         * @param codeLens code lens that must be resolved.
+         * @param token A cancellation token.
+         * @return The given, resolved code lens or thenable that resolves to such.
+         */
         resolveCodeLens?(codeLens: CodeLens, token: CancellationToken): ProviderResult<CodeLens>;
     }
 
@@ -4781,6 +7017,15 @@ declare module '@theia/plugin' {
          * @param other Kind to check.
          */
         contains(other: CodeActionKind): boolean;
+
+        /**
+         * Check if this code action kind intersects `other`.
+         * The kind "refactor.extract" for example intersects refactor, "refactor.extract" and
+         * `"refactor.extract.function", but not "unicorn.refactor.extract", or "refactor.extractAll".
+         *
+         * @param other Kind to check.
+         */
+        intersects(other: CodeActionKind): boolean;
     }
 
     /**
@@ -5052,12 +7297,57 @@ declare module '@theia/plugin' {
         resolveDocumentLink?(link: DocumentLink, token: CancellationToken | undefined): ProviderResult<DocumentLink>;
     }
 
+    /**
+    * The rename provider interface defines the contract between extensions and
+    * the [rename](https://code.visualstudio.com/docs/editor/editingevolved#_rename-symbol)-feature.
+    */
+    export interface RenameProvider {
+
+        /**
+        * Provide an edit that describes changes that have to be made to one
+        * or many resources to rename a symbol to a different name.
+        *
+        * @param document The document in which the command was invoked.
+        * @param position The position at which the command was invoked.
+        * @param newName The new name of the symbol. If the given name is not valid, the provider must return a rejected promise.
+        * @param token A cancellation token.
+        * @return A workspace edit or a thenable that resolves to such. The lack of a result can be
+        * signaled by returning `undefined` or `null`.
+        */
+        provideRenameEdits(document: TextDocument, position: Position, newName: string, token: CancellationToken): ProviderResult<WorkspaceEdit>;
+
+        /**
+        * Optional function for resolving and validating a position *before* running rename. The result can
+        * be a range or a range and a placeholder text. The placeholder text should be the identifier of the symbol
+        * which is being renamed - when omitted the text in the returned range is used.
+        *
+        * @param document The document in which rename will be invoked.
+        * @param position The position at which rename will be invoked.
+        * @param token A cancellation token.
+        * @return The range or range and placeholder text of the identifier that is to be renamed. The lack of a result can signaled by returning `undefined` or `null`.
+        */
+        prepareRename?(document: TextDocument, position: Position, token: CancellationToken): ProviderResult<Range | { range: Range, placeholder: string }>;
+    }
+
     export namespace languages {
         /**
          * Return the identifiers of all known languages.
          * @return Promise resolving to an array of identifier strings.
          */
         export function getLanguages(): PromiseLike<string[]>;
+
+        /**
+         * Set (and change) the [language](#TextDocument.languageId) that is associated
+         * with the given document.
+         *
+         * *Note* that calling this function will trigger the [`onDidCloseTextDocument`](#workspace.onDidCloseTextDocument) event
+         * followed by the [`onDidOpenTextDocument`](#workspace.onDidOpenTextDocument) event.
+         *
+         * @param document The document which language is to be changed
+         * @param languageId The new language identifier.
+         * @returns A thenable that resolves with the updated document.
+         */
+        export function setTextDocumentLanguage(document: TextDocument, languageId: string): PromiseLike<TextDocument>;
 
         /**
          * Compute the match between a document [selector](#DocumentSelector) and a document. Values
@@ -5168,6 +7458,19 @@ declare module '@theia/plugin' {
         export function registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable;
 
         /**
+         * Register a declaration provider.
+         *
+         * Multiple providers can be registered for a language. In that case providers are asked in
+         * parallel and the results are merged. A failing provider (rejected promise or exception) will
+         * not cause a failure of the whole operation.
+         *
+         * @param selector A selector that defines the documents this provider is applicable to.
+         * @param provider A declaration provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerDeclarationProvider(selector: DocumentSelector, provider: DeclarationProvider): Disposable;
+
+        /**
          * Register a signature help provider.
          *
          * Multiple providers can be registered for a language. In that case providers are sorted
@@ -5177,9 +7480,37 @@ declare module '@theia/plugin' {
          * @param selector A selector that defines the documents this provider is applicable to.
          * @param provider A signature help provider.
          * @param triggerCharacters Trigger signature help when the user types one of the characters, like `,` or `(`.
+         * @param metadata Information about the provider.
          * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
          */
         export function registerSignatureHelpProvider(selector: DocumentSelector, provider: SignatureHelpProvider, ...triggerCharacters: string[]): Disposable;
+        export function registerSignatureHelpProvider(selector: DocumentSelector, provider: SignatureHelpProvider, metadata: SignatureHelpProviderMetadata): Disposable;
+
+        /**
+         * Register a type definition provider.
+         *
+         * Multiple providers can be registered for a language. In that case providers are asked in
+         * parallel and the results are merged. A failing provider (rejected promise or exception) will
+         * not cause a failure of the whole operation.
+         *
+         * @param selector A selector that defines the documents this provider is applicable to.
+         * @param provider A type definition provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerTypeDefinitionProvider(selector: DocumentSelector, provider: TypeDefinitionProvider): Disposable;
+
+        /**
+         * Register an implementation provider.
+         *
+         * Multiple providers can be registered for a language. In that case providers are asked in
+         * parallel and the results are merged. A failing provider (rejected promise or exception) will
+         * not cause a failure of the whole operation.
+         *
+         * @param selector A selector that defines the documents this provider is applicable to.
+         * @param provider An implementation provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerImplementationProvider(selector: DocumentSelector, provider: ImplementationProvider): Disposable;
 
         /**
          * Register a hover provider.
@@ -5193,6 +7524,31 @@ declare module '@theia/plugin' {
          * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
          */
         export function registerHoverProvider(selector: DocumentSelector, provider: HoverProvider): Disposable;
+
+        /**
+         * Register a workspace symbol provider.
+         *
+         * Multiple providers can be registered for a language. In that case providers are asked in
+         * parallel and the results are merged. A failing provider (rejected promise or exception) will
+         * not cause a failure of the whole operation.
+         *
+         * @param provider A workspace symbol provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerWorkspaceSymbolProvider(provider: WorkspaceSymbolProvider): Disposable;
+
+        /**
+         * Register a document highlight provider.
+         *
+         * Multiple providers can be registered for a language. In that case providers are sorted
+         * by their [score](#languages.match) and groups sequentially asked for document highlights.
+         * The process stops when a provider returns a `non-falsy` or `non-failure` result.
+         *
+         * @param selector A selector that defines the documents this provider is applicable to.
+         * @param provider A document highlight provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerDocumentHighlightProvider(selector: DocumentSelector, provider: DocumentHighlightProvider): Disposable;
 
         /**
          * Register a formatting provider for a document.
@@ -5211,7 +7567,7 @@ declare module '@theia/plugin' {
          * Register a formatting provider for a document range.
          *
          * *Note:* A document range provider is also a [document formatter](#DocumentFormattingEditProvider)
-         * which means there is no need to [register](registerDocumentFormattingEditProvider) a document
+         * which means there is no need to [register](#registerDocumentFormattingEditProvider) a document
          * formatter when also registering a range provider.
          *
          * Multiple providers can be registered for a language. In that case providers are sorted
@@ -5309,6 +7665,75 @@ declare module '@theia/plugin' {
          * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
          */
         export function registerDocumentSymbolProvider(selector: DocumentSelector, provider: DocumentSymbolProvider): Disposable;
+
+        /**
+        * Register a color provider.
+        *
+        * Multiple providers can be registered for a language. In that case providers are asked in
+        * parallel and the results are merged. A failing provider (rejected promise or exception) will
+        * not cause a failure of the whole operation.
+        *
+        * @param selector A selector that defines the documents this provider is applicable to.
+        * @param provider A color provider.
+        * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+        */
+        export function registerColorProvider(selector: DocumentSelector, provider: DocumentColorProvider): Disposable;
+
+        /**
+        * Register a folding range provider.
+        *
+        * Multiple providers can be registered for a language. In that case providers are asked in
+        * parallel and the results are merged.
+        * If multiple folding ranges start at the same position, only the range of the first registered provider is used.
+        * If a folding range overlaps with an other range that has a smaller position, it is also ignored.
+        *
+        * A failing provider (rejected promise or exception) will
+        * not cause a failure of the whole operation.
+        *
+        * @param selector A selector that defines the documents this provider is applicable to.
+        * @param provider A folding range provider.
+        * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+        */
+        export function registerFoldingRangeProvider(selector: DocumentSelector, provider: FoldingRangeProvider): Disposable;
+
+        /**
+         * Register a selection range provider.
+         *
+         * Multiple providers can be registered for a language. In that case providers are asked in
+         * parallel and the results are merged. A failing provider (rejected promise or exception) will
+         * not cause a failure of the whole operation.
+         *
+         * @param selector A selector that defines the documents this provider is applicable to.
+         * @param provider A selection range provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerSelectionRangeProvider(selector: DocumentSelector, provider: SelectionRangeProvider): Disposable;
+
+        /**
+        * Register a reference provider.
+        *
+        * Multiple providers can be registered for a language. In that case providers are sorted
+        * by their [score](#languages.match) and the best-matching provider is used. Failure
+        * of the selected provider will cause a failure of the whole operation.
+        *
+        * @param selector A selector that defines the documents this provider is applicable to.
+        * @param provider A rename provider.
+        * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+        */
+        export function registerRenameProvider(selector: DocumentSelector, provider: RenameProvider): Disposable;
+
+        /**
+         * Register a call hierarchy provider.
+         *
+         * Multiple provider can be registered for a language. In that case providers are asked in
+         * parallel and the results are merged. A failing provider (rejected promise or exception) will
+         * not cause a failure of the whole operation.
+         *
+         * @param selector A selector that defines the documents this provider is applicable to.
+         * @param service A call hierarchy provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerCallHierarchyProvider(selector: DocumentSelector, provider: CallHierarchyProvider): Disposable;
     }
 
     /**
@@ -5359,108 +7784,1865 @@ declare module '@theia/plugin' {
     }
 
     /**
-	 * Configuration for a debug session.
-	 */
-	export interface DebugConfiguration {
-		/**
-		 * The type of the debug session.
-		 */
-		type: string;
- 		/**
-		 * The name of the debug session.
-		 */
-		name: string;
- 		/**
-		 * The request type of the debug session.
-		 */
-		request: string;
- 		/**
-		 * Additional debug type specific properties.
-		 */
-		[key: string]: any;
+     * A document highlight kind.
+     */
+    export enum DocumentHighlightKind {
+
+        /**
+         * A textual occurrence.
+         */
+        Text = 0,
+
+        /**
+         * Read-access of a symbol, like reading a variable.
+         */
+        Read = 1,
+
+        /**
+         * Write-access of a symbol, like writing to a variable.
+         */
+        Write = 2
     }
 
-	/**
-	 * A debug session.
-	 */
-	export interface DebugSession {
+    /**
+     * A document highlight is a range inside a text document which deserves
+     * special attention. Usually a document highlight is visualized by changing
+     * the background color of its range.
+     */
+    export class DocumentHighlight {
 
-		/**
-		 * The unique ID of this debug session.
-		 */
-		readonly id: string;
+        /**
+         * The range this highlight applies to.
+         */
+        range: Range;
 
-		/**
-		 * The debug session's type from the [debug configuration](#DebugConfiguration).
-		 */
-		readonly type: string;
+        /**
+         * The highlight kind, default is [text](#DocumentHighlightKind.Text).
+         */
+        kind?: DocumentHighlightKind;
 
-		/**
-		 * The debug session's name from the [debug configuration](#DebugConfiguration).
-		 */
-		readonly name: string;
-
-		/**
-		 * Send a custom request to the debug adapter.
-		 */
-		customRequest(command: string, args?: any): PromiseLike<any>;
-	}
-
- 	/**
-	 * A debug configuration provider allows to add the initial debug configurations to a newly created launch.json
-	 * and to resolve a launch configuration before it is used to start a new debug session.
-	 * A debug configuration provider is registered via #debug.registerDebugConfigurationProvider.
-	 */
-	export interface DebugConfigurationProvider {
-		/**
-		 * Provides initial [debug configuration](#DebugConfiguration). If more than one debug configuration provider is
-		 * registered for the same type, debug configurations are concatenated in arbitrary order.
-		 *
-		 * @param folder The workspace folder for which the configurations are used or undefined for a folderless setup.
-		 * @param token A cancellation token.
-		 * @return An array of [debug configurations](#DebugConfiguration).
-		 */
-		provideDebugConfigurations?(folder: WorkspaceFolder | undefined, token?: CancellationToken): ProviderResult<DebugConfiguration[]>;
- 		/**
-		 * Resolves a [debug configuration](#DebugConfiguration) by filling in missing values or by adding/changing/removing attributes.
-		 * If more than one debug configuration provider is registered for the same type, the resolveDebugConfiguration calls are chained
-		 * in arbitrary order and the initial debug configuration is piped through the chain.
-		 * Returning the value 'undefined' prevents the debug session from starting.
-		 * Returning the value 'null' prevents the debug session from starting and opens the underlying debug configuration instead.
-		 *
-		 * @param folder The workspace folder from which the configuration originates from or undefined for a folderless setup.
-		 * @param debugConfiguration The [debug configuration](#DebugConfiguration) to resolve.
-		 * @param token A cancellation token.
-		 * @return The resolved debug configuration or undefined or null.
-		 */
-		resolveDebugConfiguration?(folder: WorkspaceFolder | undefined, debugConfiguration: DebugConfiguration, token?: CancellationToken): ProviderResult<DebugConfiguration>;
+        /**
+         * Creates a new document highlight object.
+         *
+         * @param range The range the highlight applies to.
+         * @param kind The highlight kind, default is [text](#DocumentHighlightKind.Text).
+         */
+        constructor(range: Range, kind?: DocumentHighlightKind);
     }
-    
-	/**
-	 * Namespace for debug functionality.
-	 */
-	export namespace debug {
 
-		/**
-		 * An [event](#Event) which fires when the [active debug session](#debug.activeDebugSession)
-		 * has changed. *Note* that the event also fires when the active debug session changes
-		 * to `undefined`.
-		 */
-		export const onDidChangeActiveDebugSession: Event<DebugSession | undefined>;
+    /**
+     * The document highlight provider interface defines the contract between extensions and
+     * the word-highlight-feature.
+     */
+    export interface DocumentHighlightProvider {
 
-		/**
-		 * An [event](#Event) which fires when a [debug session](#DebugSession) has terminated.
-		 */
+        /**
+         * Provide a set of document highlights, like all occurrences of a variable or
+         * all exit-points of a function.
+         *
+         * @param document The document in which the command was invoked.
+         * @param position The position at which the command was invoked.
+         * @param token A cancellation token.
+         * @return An array of document highlights or a thenable that resolves to such. The lack of a result can be
+         * signaled by returning `undefined`, `null`, or an empty array.
+         */
+        provideDocumentHighlights(document: TextDocument, position: Position, token: CancellationToken | undefined): ProviderResult<DocumentHighlight[]>;
+    }
+
+    /**
+     * Represents the input box in the Source Control viewlet.
+     */
+    export interface SourceControlInputBox {
+
+        /**
+         * Setter and getter for the contents of the input box.
+         */
+        value: string;
+
+        /**
+         * A string to show as place holder in the input box to guide the user.
+         */
+        placeholder: string;
+    }
+
+    interface QuickDiffProvider {
+
+        /**
+         * Provide a [uri](#Uri) to the original resource of any given resource uri.
+         *
+         * @param uri The uri of the resource open in a text editor.
+         * @param token A cancellation token.
+         * @return A thenable that resolves to uri of the matching original resource.
+         */
+        provideOriginalResource?(uri: Uri, token: CancellationToken): ProviderResult<Uri>;
+    }
+
+    /**
+     * The theme-aware decorations for a
+     * [source control resource state](#SourceControlResourceState).
+     */
+    export interface SourceControlResourceThemableDecorations {
+
+        /**
+         * The icon path for a specific
+         * [source control resource state](#SourceControlResourceState).
+         */
+        readonly iconPath?: string | Uri;
+    }
+
+    /**
+     * The decorations for a [source control resource state](#SourceControlResourceState).
+     * Can be independently specified for light and dark themes.
+     */
+    export interface SourceControlResourceDecorations extends SourceControlResourceThemableDecorations {
+
+        /**
+         * Whether the [source control resource state](#SourceControlResourceState) should
+         * be striked-through in the UI.
+         */
+        readonly strikeThrough?: boolean;
+
+        /**
+         * Whether the [source control resource state](#SourceControlResourceState) should
+         * be faded in the UI.
+         */
+        readonly faded?: boolean;
+
+        /**
+         * The title for a specific
+         * [source control resource state](#SourceControlResourceState).
+         */
+        readonly tooltip?: string;
+
+        /**
+         * The light theme decorations.
+         */
+        readonly light?: SourceControlResourceThemableDecorations;
+
+        /**
+         * The dark theme decorations.
+         */
+        readonly dark?: SourceControlResourceThemableDecorations;
+    }
+
+    /**
+     * An source control resource state represents the state of an underlying workspace
+     * resource within a certain [source control group](#SourceControlResourceGroup).
+     */
+    export interface SourceControlResourceState {
+
+        /**
+         * The [uri](#Uri) of the underlying resource inside the workspace.
+         */
+        readonly resourceUri: Uri;
+
+        /**
+         * The [command](#Command) which should be run when the resource
+         * state is open in the Source Control viewlet.
+         */
+        readonly command?: Command;
+
+        /**
+         * The [decorations](#SourceControlResourceDecorations) for this source control
+         * resource state.
+         */
+        readonly decorations?: SourceControlResourceDecorations;
+    }
+
+    /**
+     * A source control resource group is a collection of
+     * [source control resource states](#SourceControlResourceState).
+     */
+    export interface SourceControlResourceGroup {
+
+        /**
+         * The id of this source control resource group.
+         */
+        readonly id: string;
+
+        /**
+         * The label of this source control resource group.
+         */
+        label: string;
+
+        /**
+         * Whether this source control resource group is hidden when it contains
+         * no [source control resource states](#SourceControlResourceState).
+         */
+        hideWhenEmpty?: boolean;
+
+        /**
+         * This group's collection of
+         * [source control resource states](#SourceControlResourceState).
+         */
+        resourceStates: SourceControlResourceState[];
+
+        /**
+         * Dispose this source control resource group.
+         */
+        dispose(): void;
+    }
+
+    /**
+     * An source control is able to provide [resource states](#SourceControlResourceState)
+     * to the editor and interact with the editor in several source control related ways.
+     */
+    export interface SourceControl {
+
+        /**
+         * The id of this source control.
+         */
+        readonly id: string;
+
+        /**
+         * The human-readable label of this source control.
+         */
+        readonly label: string;
+
+        /**
+         * The (optional) Uri of the root of this source control.
+         */
+        readonly rootUri: Uri | undefined;
+
+        /**
+         * The [input box](#SourceControlInputBox) for this source control.
+         */
+        readonly inputBox: SourceControlInputBox;
+
+        /**
+         * The UI-visible count of [resource states](#SourceControlResourceState) of
+         * this source control.
+         *
+         * Equals to the total number of [resource state](#SourceControlResourceState)
+         * of this source control, if undefined.
+         */
+        count?: number;
+
+        /**
+         * An optional [quick diff provider](#QuickDiffProvider).
+         */
+        quickDiffProvider?: QuickDiffProvider;
+
+        /**
+         * Optional commit template string.
+         *
+         * The Source Control viewlet will populate the Source Control
+         * input with this value when appropriate.
+         */
+        commitTemplate?: string;
+
+        /**
+         * Optional accept input command.
+         *
+         * This command will be invoked when the user accepts the value
+         * in the Source Control input.
+         */
+        acceptInputCommand?: Command;
+
+        /**
+         * Optional status bar commands.
+         *
+         * These commands will be displayed in the editor's status bar.
+         */
+        statusBarCommands?: Command[];
+
+        /**
+         * Create a new [resource group](#SourceControlResourceGroup).
+         */
+        createResourceGroup(id: string, label: string): SourceControlResourceGroup;
+
+        /**
+         * Dispose this source control.
+         */
+        dispose(): void;
+    }
+
+    export namespace scm {
+
+        /**
+         * ~~The [input box](#SourceControlInputBox) for the last source control
+         * created by the extension.~~
+         *
+         * @deprecated Use SourceControl.inputBox instead
+         */
+        export const inputBox: SourceControlInputBox;
+
+        /**
+         * Creates a new [source control](#SourceControl) instance.
+         *
+         * @param id An `id` for the source control. Something short, eg: `git`.
+         * @param label A human-readable string for the source control. Eg: `Git`.
+         * @param rootUri An optional Uri of the root of the source control. Eg: `Uri.parse(workspaceRoot)`.
+         * @return An instance of [source control](#SourceControl).
+         */
+        export function createSourceControl(id: string, label: string, rootUri?: Uri): SourceControl;
+    }
+
+    /**
+     * Configuration for a debug session.
+     */
+    export interface DebugConfiguration {
+        /**
+         * The type of the debug session.
+         */
+        type: string;
+
+        /**
+         * The name of the debug session.
+         */
+        name: string;
+
+        /**
+         * The request type of the debug session.
+         */
+        request: string;
+
+        /**
+         * Additional debug type specific properties.
+         */
+        [key: string]: any;
+    }
+
+    /**
+ * A debug session.
+ */
+    export interface DebugSession {
+
+        /**
+         * The unique ID of this debug session.
+         */
+        readonly id: string;
+
+        /**
+         * The debug session's type from the [debug configuration](#DebugConfiguration).
+         */
+        readonly type: string;
+
+        /**
+         * The debug session's name from the [debug configuration](#DebugConfiguration).
+         */
+        readonly name: string;
+
+        /**
+         * The "resolved" [debug configuration](#DebugConfiguration) of this session.
+         */
+        readonly configuration: DebugConfiguration;
+
+        /**
+         * Send a custom request to the debug adapter.
+         */
+        customRequest(command: string, args?: any): PromiseLike<any>;
+    }
+
+    /**
+     * A custom Debug Adapter Protocol event received from a [debug session](#DebugSession).
+     */
+    export interface DebugSessionCustomEvent {
+        /**
+         * The [debug session](#DebugSession) for which the custom event was received.
+         */
+        session: DebugSession;
+
+        /**
+         * Type of event.
+         */
+        event: string;
+
+        /**
+         * Event specific information.
+         */
+        body?: any;
+    }
+
+    /**
+     * A debug configuration provider allows to add the initial debug configurations to a newly created launch.json
+     * and to resolve a launch configuration before it is used to start a new debug session.
+     * A debug configuration provider is registered via #debug.registerDebugConfigurationProvider.
+     */
+    export interface DebugConfigurationProvider {
+        /**
+         * Provides initial [debug configuration](#DebugConfiguration). If more than one debug configuration provider is
+         * registered for the same type, debug configurations are concatenated in arbitrary order.
+         *
+         * @param folder The workspace folder for which the configurations are used or undefined for a folderless setup.
+         * @param token A cancellation token.
+         * @return An array of [debug configurations](#DebugConfiguration).
+         */
+        provideDebugConfigurations?(folder: WorkspaceFolder | undefined, token?: CancellationToken): ProviderResult<DebugConfiguration[]>;
+
+        /**
+         * Resolves a [debug configuration](#DebugConfiguration) by filling in missing values or by adding/changing/removing attributes.
+         * If more than one debug configuration provider is registered for the same type, the resolveDebugConfiguration calls are chained
+         * in arbitrary order and the initial debug configuration is piped through the chain.
+         * Returning the value 'undefined' prevents the debug session from starting.
+         * Returning the value 'null' prevents the debug session from starting and opens the underlying debug configuration instead.
+         *
+         * @param folder The workspace folder from which the configuration originates from or undefined for a folderless setup.
+         * @param debugConfiguration The [debug configuration](#DebugConfiguration) to resolve.
+         * @param token A cancellation token.
+         * @return The resolved debug configuration or undefined or null.
+         */
+        resolveDebugConfiguration?(folder: WorkspaceFolder | undefined, debugConfiguration: DebugConfiguration, token?: CancellationToken): ProviderResult<DebugConfiguration>;
+    }
+
+    /**
+     * A Debug Adapter Tracker is a means to track the communication between VS Code and a Debug Adapter.
+     */
+    export interface DebugAdapterTracker {
+        /**
+         * A session with the debug adapter is about to be started.
+         */
+        onWillStartSession?(): void;
+        /**
+         * The debug adapter is about to receive a Debug Adapter Protocol message from VS Code.
+         */
+        onWillReceiveMessage?(message: any): void;
+        /**
+         * The debug adapter has sent a Debug Adapter Protocol message to VS Code.
+         */
+        onDidSendMessage?(message: any): void;
+        /**
+         * The debug adapter session is about to be stopped.
+         */
+        onWillStopSession?(): void;
+        /**
+         * An error with the debug adapter has occurred.
+         */
+        onError?(error: Error): void;
+        /**
+         * The debug adapter has exited with the given exit code or signal.
+         */
+        onExit?(code: number | undefined, signal: string | undefined): void;
+    }
+
+    export interface DebugAdapterTrackerFactory {
+        /**
+         * The method 'createDebugAdapterTracker' is called at the start of a debug session in order
+         * to return a "tracker" object that provides read-access to the communication between VS Code and a debug adapter.
+         *
+         * @param session The [debug session](#DebugSession) for which the debug adapter tracker will be used.
+         * @return A [debug adapter tracker](#DebugAdapterTracker) or undefined.
+         */
+        createDebugAdapterTracker(session: DebugSession): ProviderResult<DebugAdapterTracker>;
+    }
+
+    /**
+     * Represents a debug adapter executable and optional arguments and runtime options passed to it.
+     */
+    export class DebugAdapterExecutable {
+
+        /**
+         * Creates a description for a debug adapter based on an executable program.
+         *
+         * @param command The command or executable path that implements the debug adapter.
+         * @param args Optional arguments to be passed to the command or executable.
+         * @param options Optional options to be used when starting the command or executable.
+         */
+        constructor(command: string, args?: string[], options?: DebugAdapterExecutableOptions);
+
+        /**
+         * The command or path of the debug adapter executable.
+         * A command must be either an absolute path of an executable or the name of an command to be looked up via the PATH environment variable.
+         * The special value 'node' will be mapped to VS Code's built-in Node.js runtime.
+         */
+        readonly command: string;
+
+        /**
+         * The arguments passed to the debug adapter executable. Defaults to an empty array.
+         */
+        readonly args: string[];
+
+        /**
+         * Optional options to be used when the debug adapter is started.
+         * Defaults to undefined.
+         */
+        readonly options?: DebugAdapterExecutableOptions;
+    }
+
+    /**
+     * Options for a debug adapter executable.
+     */
+    export interface DebugAdapterExecutableOptions {
+
+        /**
+         * The additional environment of the executed program or shell. If omitted
+         * the parent process' environment is used. If provided it is merged with
+         * the parent process' environment.
+         */
+        env?: { [key: string]: string };
+
+        /**
+         * The current working directory for the executed debug adapter.
+         */
+        cwd?: string;
+    }
+
+    /**
+     * Represents a debug adapter running as a socket based server.
+     */
+    export class DebugAdapterServer {
+
+        /**
+         * The port.
+         */
+        readonly port: number;
+
+        /**
+         * The host.
+         */
+        readonly host?: string;
+
+        /**
+         * Create a description for a debug adapter running as a socket based server.
+         */
+        constructor(port: number, host?: string);
+    }
+
+    export type DebugAdapterDescriptor = DebugAdapterExecutable | DebugAdapterServer;
+
+    export interface DebugAdapterDescriptorFactory {
+        /**
+         * 'createDebugAdapterDescriptor' is called at the start of a debug session to provide details about the debug adapter to use.
+         * These details must be returned as objects of type [DebugAdapterDescriptor](#DebugAdapterDescriptor).
+         * Currently two types of debug adapters are supported:
+         * - a debug adapter executable is specified as a command path and arguments (see [DebugAdapterExecutable](#DebugAdapterExecutable)),
+         * - a debug adapter server reachable via a communication port (see [DebugAdapterServer](#DebugAdapterServer)).
+         * If the method is not implemented the default behavior is this:
+         *   createDebugAdapter(session: DebugSession, executable: DebugAdapterExecutable) {
+         *      if (typeof session.configuration.debugServer === 'number') {
+         *         return new DebugAdapterServer(session.configuration.debugServer);
+         *      }
+         *      return executable;
+         *   }
+         * @param session The [debug session](#DebugSession) for which the debug adapter will be used.
+         * @param executable The debug adapter's executable information as specified in the package.json (or undefined if no such information exists).
+         * @return a [debug adapter descriptor](#DebugAdapterDescriptor) or undefined.
+         */
+        createDebugAdapterDescriptor(session: DebugSession, executable: DebugAdapterExecutable | undefined): ProviderResult<DebugAdapterDescriptor>;
+    }
+
+    /**
+     * Represents the debug console.
+     */
+    export interface DebugConsole {
+        /**
+         * Append the given value to the debug console.
+         *
+         * @param value A string, falsy values will not be printed.
+         */
+        append(value: string): void;
+
+        /**
+         * Append the given value and a line feed character
+         * to the debug console.
+         *
+         * @param value A string, falsy values will be printed.
+         */
+        appendLine(value: string): void;
+    }
+
+    /**
+     * An event describing the changes to the set of [breakpoints](#Breakpoint).
+     */
+    export interface BreakpointsChangeEvent {
+        /**
+         * Added breakpoints.
+         */
+        readonly added: Breakpoint[];
+
+        /**
+         * Removed breakpoints.
+         */
+        readonly removed: Breakpoint[];
+
+        /**
+         * Changed breakpoints.
+         */
+        readonly changed: Breakpoint[];
+    }
+
+    /**
+     * The base class of all breakpoint types.
+     */
+    export class Breakpoint {
+        /**
+         * The unique ID of the breakpoint.
+         */
+        readonly id: string;
+        /**
+         * Is breakpoint enabled.
+         */
+        readonly enabled: boolean;
+        /**
+         * An optional expression for conditional breakpoints.
+         */
+        readonly condition?: string;
+        /**
+         * An optional expression that controls how many hits of the breakpoint are ignored.
+         */
+        readonly hitCondition?: string;
+        /**
+         * An optional message that gets logged when this breakpoint is hit. Embedded expressions within {} are interpolated by the debug adapter.
+         */
+        readonly logMessage?: string;
+
+        protected constructor(enabled?: boolean, condition?: string, hitCondition?: string, logMessage?: string);
+    }
+
+    /**
+     * A breakpoint specified by a source location.
+     */
+    export class SourceBreakpoint extends Breakpoint {
+        /**
+         * The source and line position of this breakpoint.
+         */
+        readonly location: Location;
+
+        /**
+         * Create a new breakpoint for a source location.
+         */
+        constructor(location: Location, enabled?: boolean, condition?: string, hitCondition?: string, logMessage?: string);
+    }
+
+    /**
+     * A breakpoint specified by a function name.
+     */
+    export class FunctionBreakpoint extends Breakpoint {
+        /**
+         * The name of the function to which this breakpoint is attached.
+         */
+        readonly functionName: string;
+
+        /**
+         * Create a new function breakpoint.
+         */
+        constructor(functionName: string, enabled?: boolean, condition?: string, hitCondition?: string, logMessage?: string);
+    }
+
+    /**
+     * Namespace for debug functionality.
+     */
+    export namespace debug {
+
+        /**
+         * The currently active [debug session](#DebugSession) or `undefined`. The active debug session is the one
+         * represented by the debug action floating window or the one currently shown in the drop down menu of the debug action floating window.
+         * If no debug session is active, the value is `undefined`.
+         */
+        export let activeDebugSession: DebugSession | undefined;
+
+        /**
+         * The currently active [debug console](#DebugConsole).
+         */
+        export let activeDebugConsole: DebugConsole;
+
+        /**
+         * List of breakpoints.
+         */
+        export let breakpoints: Breakpoint[];
+
+        /**
+         * An [event](#Event) which fires when the [active debug session](#debug.activeDebugSession)
+         * has changed. *Note* that the event also fires when the active debug session changes
+         * to `undefined`.
+         */
+        export const onDidChangeActiveDebugSession: Event<DebugSession | undefined>;
+
+        /**
+         * An [event](#Event) which fires when a new [debug session](#DebugSession) has been started.
+         */
+        export const onDidStartDebugSession: Event<DebugSession>;
+
+        /**
+         * An [event](#Event) which fires when a custom DAP event is received from the [debug session](#DebugSession).
+         */
+        export const onDidReceiveDebugSessionCustomEvent: Event<DebugSessionCustomEvent>;
+
+        /**
+         * An [event](#Event) which fires when a [debug session](#DebugSession) has terminated.
+         */
         export const onDidTerminateDebugSession: Event<DebugSession>;
-        
- 		/**
-		 * Register a [debug configuration provider](#DebugConfigurationProvider) for a specific debug type.
-		 * More than one provider can be registered for the same type.
-		 *
-		 * @param type The debug type for which the provider is registered.
-		 * @param provider The [debug configuration provider](#DebugConfigurationProvider) to register.
-		 * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+
+        /**
+         * An [event](#Event) that is emitted when the set of breakpoints is added, removed, or changed.
+         */
+        export const onDidChangeBreakpoints: Event<BreakpointsChangeEvent>;
+
+        /**
+         * Register a [debug adapter descriptor factory](#DebugAdapterDescriptorFactory) for a specific debug type.
+         * An extension is only allowed to register a DebugAdapterDescriptorFactory for the debug type(s) defined by the extension. Otherwise an error is thrown.
+         * Registering more than one DebugAdapterDescriptorFactory for a debug type results in an error.
+         *
+         * @param debugType The debug type for which the factory is registered.
+         * @param factory The [debug adapter descriptor factory](#DebugAdapterDescriptorFactory) to register.
+         * @return A [disposable](#Disposable) that unregisters this factory when being disposed.
+         */
+        export function registerDebugAdapterDescriptorFactory(debugType: string, factory: DebugAdapterDescriptorFactory): Disposable;
+
+        /**
+         * Register a [debug configuration provider](#DebugConfigurationProvider) for a specific debug type.
+         * More than one provider can be registered for the same type.
+         *
+         * @param type The debug type for which the provider is registered.
+         * @param provider The [debug configuration provider](#DebugConfigurationProvider) to register.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerDebugConfigurationProvider(debugType: string, provider: DebugConfigurationProvider): Disposable;
+
+        /**
+         * Register a debug adapter tracker factory for the given debug type.
+         *
+         * @param debugType The debug type for which the factory is registered or '*' for matching all debug types.
+         * @param factory The [debug adapter tracker factory](#DebugAdapterTrackerFactory) to register.
+         * @return A [disposable](#Disposable) that unregisters this factory when being disposed.
+         */
+        export function registerDebugAdapterTrackerFactory(debugType: string, factory: DebugAdapterTrackerFactory): Disposable;
+
+        /**
+         * Start debugging by using either a named launch or named compound configuration,
+         * or by directly passing a [DebugConfiguration](#DebugConfiguration).
+         * The named configurations are looked up in '.vscode/launch.json' found in the given folder.
+         * Before debugging starts, all unsaved files are saved and the launch configurations are brought up-to-date.
+         * Folder specific variables used in the configuration (e.g. '${workspaceFolder}') are resolved against the given folder.
+         * @param folder The [workspace folder](#WorkspaceFolder) for looking up named configurations and resolving variables or `undefined` for a non-folder setup.
+         * @param nameOrConfiguration Either the name of a debug or compound configuration or a [DebugConfiguration](#DebugConfiguration) object.
+         * @return A thenable that resolves when debugging could be successfully started.
+         */
+        export function startDebugging(folder: WorkspaceFolder | undefined, nameOrConfiguration: string | DebugConfiguration): PromiseLike<boolean>;
+
+        /**
+         * Add breakpoints.
+         * @param breakpoints The breakpoints to add.
+        */
+        export function addBreakpoints(breakpoints: Breakpoint[]): void;
+
+        /**
+         * Remove breakpoints.
+         * @param breakpoints The breakpoints to remove.
+         */
+        export function removeBreakpoints(breakpoints: Breakpoint[]): void;
+    }
+
+    /**
+     * Represents options to configure the behavior of showing a [document](#TextDocument) in an [editor](#TextEditor).
+     */
+    export interface TextDocumentShowOptions {
+        /**
+         * An optional view column in which the [editor](#TextEditor) should be shown.
+         * The default is the [active](#ViewColumn.Active), other values are adjusted to
+         * be `Min(column, columnCount + 1)`, the [active](#ViewColumn.Active)-column is
+         * not adjusted. Use [`ViewColumn.Beside`](#ViewColumn.Beside) to open the
+         * editor to the side of the currently active one.
+         */
+        viewColumn?: ViewColumn;
+
+        /**
+         * An optional flag that when `true` will stop the [editor](#TextEditor) from taking focus.
+         */
+        preserveFocus?: boolean;
+
+        /**
+         * An optional flag that controls if an [editor](#TextEditor)-tab will be replaced
+         * with the next editor or if it will be kept.
+         */
+        preview?: boolean;
+
+        /**
+         * An optional selection to apply for the document in the [editor](#TextEditor).
+         */
+        selection?: Range;
+    }
+
+    export enum ShellQuoting {
+
+        /**
+         * Character escaping should be used. This for example
+         * uses \ on bash and ` on PowerShell.
+         */
+        Escape = 1,
+
+        /**
+         * Strong string quoting should be used. This for example
+         * uses " for Windows cmd and ' for bash and PowerShell.
+         * Strong quoting treats arguments as literal strings.
+         * Under PowerShell echo 'The value is $(2 * 3)' will
+         * print `The value is $(2 * 3)`
+         */
+        Strong = 2,
+
+        /**
+         * Weak string quoting should be used. This for example
+         * uses " for Windows cmd, bash and PowerShell. Weak quoting
+         * still performs some kind of evaluation inside the quoted
+         * string.  Under PowerShell echo "The value is $(2 * 3)"
+         * will print `The value is 6`
+         */
+        Weak = 3
+    }
+
+    /** A string that will be quoted depending on the used shell. */
+    export interface ShellQuotedString {
+        /** The actual string value */
+        value: string;
+
+        /** The quoting style to use */
+        quoting: ShellQuoting;
+    }
+
+    export interface ShellQuotingOptions {
+
+        /**
+         * The character used to do character escaping. If a string is provided only spaces
+         * are escaped. If a `{ escapeChar, charsToEscape }` literal is provide all characters
+         * in `charsToEscape` are escaped using the `escapeChar`.
+         */
+        escape?: string | {
+            /** The escape character */
+            escapeChar: string;
+
+            /** The characters to escape */
+            charsToEscape: string;
+        };
+
+        /** The character used for strong quoting. The string's length must be 1 */
+        strong?: string;
+
+        /** The character used for weak quoting. The string's length must be 1 */
+        weak?: string;
+    }
+
+    export interface ShellExecutionOptions {
+
+        /** The shell executable */
+        executable?: string;
+
+        /**
+         * The arguments to be passed to the shell executable used to run the task. Most shells
+         * require special arguments to execute a command. For  example `bash` requires the `-c`
+         * argument to execute a command, `PowerShell` requires `-Command` and `cmd` requires both
+         * `/d` and `/c`.
+         */
+        shellArgs?: string[];
+
+        /** The shell quotes supported by this shell */
+        shellQuoting?: ShellQuotingOptions;
+
+        /**
+         * The current working directory of the executed shell.
+         * If omitted the tools current workspace root is used.
+         */
+        cwd?: string;
+
+        /**
+         * The additional environment of the executed shell. If omitted
+         * the parent process' environment is used. If provided it is merged with
+         * the parent process' environment.
+         */
+        env?: { [key: string]: string };
+    }
+
+    export class ShellExecution {
+        /**
+         * Creates a shell execution with a full command line.
+         *
+         * @param commandLine The command line to execute.
+         * @param options Optional options for the started the shell.
+         */
+        constructor(commandLine: string, options?: ShellExecutionOptions);
+
+        /**
+         * Creates a shell execution with a command and arguments. For the real execution VS Code will
+         * construct a command line from the command and the arguments. This is subject to interpretation
+         * especially when it comes to quoting. If full control over the command line is needed please
+         * use the constructor that creates a `ShellExecution` with the full command line.
+         *
+         * @param command The command to execute.
+         * @param args The command arguments.
+         * @param options Optional options for the started the shell.
+         */
+        constructor(command: string | ShellQuotedString, args: (string | ShellQuotedString)[], options?: ShellExecutionOptions);
+
+        /**
+         * The shell command line. Is `undefined` if created with a command and arguments.
+         */
+        commandLine?: string;
+
+        /**
+         * The shell options used when the command line is executed in a shell.
+         * Defaults to undefined.
+         */
+        options?: ShellExecutionOptions;
+
+        /**
+         * The shell command. Is `undefined` if created with a full command line.
+         */
+        command?: string | ShellQuotedString;
+
+        /**
+         * The shell args. Is `undefined` if created with a full command line.
+         */
+        args?: (string | ShellQuotedString)[];
+    }
+
+    export interface ProcessExecutionOptions {
+        /**
+         * The current working directory of the executed program or shell.
+         * If omitted the tools current workspace root is used.
+         */
+        cwd?: string;
+
+        /**
+         * The additional environment of the executed program or shell. If omitted
+         * the parent process' environment is used. If provided it is merged with
+         * the parent process' environment.
+         */
+        env?: { [key: string]: string };
+    }
+
+    export class ProcessExecution {
+
+        /**
+         * Creates a process execution.
+         *
+         * @param process The process to start.
+         * @param options Optional options for the started process.
+         */
+        constructor(process: string, options?: ProcessExecutionOptions);
+
+        /**
+         * Creates a process execution.
+         *
+         * @param process The process to start.
+         * @param args Arguments to be passed to the process.
+         * @param options Optional options for the started process.
+         */
+        constructor(process: string, args: string[], options?: ProcessExecutionOptions);
+
+        /** The process to be executed. */
+        process: string;
+
+        /** The arguments passed to the process. Defaults to an empty array. */
+        args: string[];
+
+        /**
+         * The process options used when the process is executed.
+         * Defaults to undefined.
+         */
+        options?: ProcessExecutionOptions;
+    }
+
+    export interface TaskDefinition {
+        /**
+         * The task definition describing the task provided by an extension.
+         * Usually a task provider defines more properties to identify
+         * a task. They need to be defined in the package.json of the
+         * extension under the 'taskDefinitions' extension point. The npm
+         * task definition for example looks like this
+         * ```typescript
+         * interface NpmTaskDefinition extends TaskDefinition {
+         *     script: string;
+         * }
+         * ```
+         *
+         * Note that type identifier starting with a '$' are reserved for internal
+         * usages and shouldn't be used by extensions.
+         */
+        readonly type: string;
+
+        /** Additional attributes of a concrete task definition. */
+        [name: string]: any;
+    }
+
+    export enum TaskScope {
+        /** The task is a global task */
+        Global = 1,
+
+        /** The task is a workspace task */
+        Workspace = 2
+    }
+
+    export class TaskGroup {
+
+        /** The clean task group */
+        static Clean: TaskGroup;
+
+        /** The build task group */
+        static Build: TaskGroup;
+
+        /** The rebuild all task group */
+        static Rebuild: TaskGroup;
+
+        /** The test all task group */
+        static Test: TaskGroup;
+
+        private constructor(id: string, label: string);
+    }
+
+    /** Controls the behaviour of the terminal's visibility. */
+    export enum TaskRevealKind {
+        /** Always brings the terminal to front if the task is executed. */
+        Always = 1,
+
+        /**
+         * Only brings the terminal to front if a problem is detected executing the task
+         * (e.g. the task couldn't be started because).
+         */
+        Silent = 2,
+
+        /** The terminal never comes to front when the task is executed. */
+        Never = 3
+    }
+
+    /** Controls how the task channel is used between tasks */
+    export enum TaskPanelKind {
+
+        /** Shares a panel with other tasks. This is the default. */
+        Shared = 1,
+
+        /**
+         * Uses a dedicated panel for this tasks. The panel is not
+         * shared with other tasks.
+         */
+        Dedicated = 2,
+
+        /** Creates a new panel whenever this task is executed. */
+        New = 3
+    }
+
+    export interface TaskPresentationOptions {
+        /**
+         * Controls whether the task output is reveal in the user interface.
+         * Defaults to `RevealKind.Always`.
+         */
+        reveal?: TaskRevealKind;
+
+        /**
+         * Controls whether the command associated with the task is echoed
+         * in the user interface.
+         */
+        echo?: boolean;
+
+        /** Controls whether the panel showing the task output is taking focus. */
+        focus?: boolean;
+
+        /**
+         * Controls if the task panel is used for this task only (dedicated),
+         * shared between tasks (shared) or if a new panel is created on
+         * every task execution (new). Defaults to `TaskInstanceKind.Shared`
+         */
+        panel?: TaskPanelKind;
+
+        /** Controls whether to show the "Terminal will be reused by tasks, press any key to close it" message. */
+        showReuseMessage?: boolean;
+    }
+
+    export class Task {
+
+        /**
+         * Creates a new task.
+         *
+         * @param definition The task definition.
+         * @param scope Specifies the task's scope.
+         * @param name The task's name. Is presented in the user interface.
+         * @param source The task's source (e.g. 'gulp', 'npm', ...). Is presented in the user interface.
+         * @param execution The process or shell execution.
+         * @param problemMatchers the names of problem matchers to use, like '$tsc'
+         *  or '$eslint'. Problem matchers can be contributed by an extension using
+         *  the `problemMatchers` extension point.
+         */
+        constructor(
+            taskDefinition: TaskDefinition,
+            scope: WorkspaceFolder | TaskScope.Global | TaskScope.Workspace,
+            name: string,
+            source?: string,
+            execution?: ProcessExecution | ShellExecution,
+            problemMatchers?: string | string[]);
+
+        /**
+         * ~~Creates a new task.~~
+         *
+         * @deprecated Use the new constructors that allow specifying a scope for the task.
+         *
+         * @param definition The task definition as defined in the taskDefinitions extension point.
+         * @param name The task's name. Is presented in the user interface.
+         * @param source The task's source (e.g. 'gulp', 'npm', ...). Is presented in the user interface.
+         * @param execution The process or shell execution.
+         * @param problemMatchers the names of problem matchers to use, like '$tsc'
+         *  or '$eslint'. Problem matchers can be contributed by an extension using
+         *  the `problemMatchers` extension point.
+         */
+        constructor(
+            taskDefinition: TaskDefinition,
+            name: string,
+            source: string,
+            execution?: ProcessExecution | ShellExecution,
+            problemMatchers?: string | string[]);
+
+        /** The task's name */
+        name: string;
+
+        /** The task's definition. */
+        definition: TaskDefinition;
+
+        /** The task's scope. */
+        scope?: TaskScope.Global | TaskScope.Workspace | WorkspaceFolder;
+
+        /** The task's execution engine */
+        execution?: ProcessExecution | ShellExecution;
+
+        /** Whether the task is a background task or not. */
+        isBackground?: boolean;
+
+        /**
+         * A human-readable string describing the source of this
+         * shell task, e.g. 'gulp' or 'npm'.
+         */
+        source?: string;
+
+        /**
+         * The task group this tasks belongs to. See TaskGroup
+         * for a predefined set of available groups.
+         * Defaults to undefined meaning that the task doesn't
+         * belong to any special group.
+         */
+        group?: TaskGroup;
+
+        /** The presentation options. Defaults to an empty literal. */
+        presentationOptions?: TaskPresentationOptions;
+
+        /**
+         * The problem matchers attached to the task. Defaults to an empty
+         * array.
+         */
+        problemMatchers?: string[];
+    }
+
+    export class Task2 extends Task {
+        detail?: string;
+    }
+
+    export interface TaskProvider {
+        /**
+         * Provides tasks.
+         * @param token A cancellation token.
+         * @return an array of tasks
+         */
+        provideTasks(token?: CancellationToken): ProviderResult<Task[]>;
+
+        /**
+         * Resolves a task that has no [`execution`](#Task.execution) set. Tasks are
+         * often created from information found in the `tasks.json`-file. Such tasks miss
+         * the information on how to execute them and a task provider must fill in
+         * the missing information in the `resolveTask`-method.
+         *
+         * @param task The task to resolve.
+         * @param token A cancellation token.
+         * @return The resolved task
+         */
+        resolveTask(task: Task, token?: CancellationToken): ProviderResult<Task>;
+    }
+
+    /**
+     * An object representing an executed Task. It can be used
+     * to terminate a task.
+     *
+     * This interface is not intended to be implemented.
+     */
+    export interface TaskExecution {
+        /**
+         * The task that got started.
+         */
+        task: Task;
+
+        /**
+         * Terminates the task execution.
+         */
+        terminate(): void;
+    }
+
+    /**
+     * An event signaling the start of a task execution.
+     *
+     * This interface is not intended to be implemented.
+     */
+    interface TaskStartEvent {
+        /**
+         * The task item representing the task that got started.
+         */
+        execution: TaskExecution;
+    }
+
+    /**
+     * An event signaling the end of an executed task.
+     *
+     * This interface is not intended to be implemented.
+     */
+    interface TaskEndEvent {
+        /**
+         * The task item representing the task that finished.
+         */
+        execution: TaskExecution;
+    }
+
+    /**
+     * An event signaling the start of a process execution
+     * triggered through a task
+     */
+    export interface TaskProcessStartEvent {
+        /**
+         * The task execution for which the process got started.
+         */
+        execution: TaskExecution;
+
+        /**
+         * The underlying process id.
+         */
+        processId: number;
+    }
+
+    /**
+     * An event signaling the end of a process execution
+     * triggered through a task
+     */
+    export interface TaskProcessEndEvent {
+
+        /**
+         * The task execution for which the process got started.
+         */
+        execution: TaskExecution;
+
+        /**
+         * The process's exit code.
+         */
+        exitCode: number;
+    }
+
+    export interface TaskFilter {
+        /**
+         * The task version as used in the tasks.json file.
+         * The string support the package.json semver notation.
+         */
+        version?: string;
+
+        /**
+         * The type of tasks to return.
+         */
+        type?: string;
+    }
+
+    export namespace tasks {
+
+        /**
+         * Register a task provider.
+         *
+         * @param type The task kind type this provider is registered for.
+         * @param provider A task provider.
+         * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+         */
+        export function registerTaskProvider(type: string, provider: TaskProvider): Disposable;
+
+        /**
+         * Fetches all tasks available in the systems. This includes tasks
+         * from `tasks.json` files as well as tasks from task providers
+         * contributed through extensions and plugins.
+         *
+         * @param filter a filter to filter the return tasks.
+         */
+        export function fetchTasks(filter?: TaskFilter): PromiseLike<Task[]>;
+
+        /**
+         * Executes a task that is managed by VS Code. The returned
+         * task execution can be used to terminate the task.
+         *
+         * @param task the task to execute
+         */
+        export function executeTask(task: Task): PromiseLike<TaskExecution>;
+
+        /**
+         * The currently active task executions or an empty array.
+         */
+        export const taskExecutions: ReadonlyArray<TaskExecution>;
+
+        /** Fires when a task starts. */
+        export const onDidStartTask: Event<TaskStartEvent>;
+
+        /** Fires when a task ends. */
+        export const onDidEndTask: Event<TaskEndEvent>;
+
+        /**
+         * Fires when the underlying process has been started.
+         * This event will not fire for tasks that don't
+         * execute an underlying process.
+         */
+        export const onDidStartTaskProcess: Event<TaskProcessStartEvent>;
+
+        /**
+         * Fires when the underlying process has ended.
+         * This event will not fire for tasks that don't
+         * execute an underlying process.
+         */
+        export const onDidEndTaskProcess: Event<TaskProcessEndEvent>;
+    }
+
+    /**
+     * A memento represents a storage utility. It can store and retrieve
+     * values.
+     */
+    export interface Memento {
+
+        /**
+         * Return a value.
+         *
+         * @param key A string.
+         * @return The stored value or `undefined`.
+         */
+        get<T>(key: string): T | undefined;
+
+        /**
+         * Return a value.
+         *
+         * @param key A string.
+         * @param defaultValue A value that should be returned when there is no
+         * value (`undefined`) with the given key.
+         * @return The stored value or the defaultValue.
+         */
+        get<T>(key: string, defaultValue: T): T;
+
+        /**
+         * Store a value. The value must be JSON-stringifyable.
+         *
+         * @param key A string.
+         * @param value A value. MUST not contain cyclic references.
+         */
+        update(key: string, value: any): PromiseLike<void>;
+    }
+
+    /* The workspace symbol provider interface defines the contract between extensions
+    * and the [symbol search](https://code.visualstudio.com/docs/editor/intellisense)-feature.
+    */
+    export interface WorkspaceSymbolProvider {
+
+        /**
+         * Project-wide search for a symbol matching the given query string.
+         *
+         * The query-parameter should be interpreted in a relaxed way as the editor will apply its own
+         * highlighting and scoring on the results. A good rule of thumb is to match case-insensitive and to
+         * simply check that the characters of query appear in their order in a candidate symbol. Don't use
+         * prefix, substring, or similar strict matching.
+         *
+         * To improve performance implementors can implement resolveWorkspaceSymbol and then provide
+         * symbols with partial location-objects, without a range defined. The editor will then call
+         * resolveWorkspaceSymbol for selected symbols only, e.g. when opening a workspace symbol.
+         *
+         * @param query A non-empty query string.
+         * @param token A cancellation token.
+         * @return An array of document highlights or a thenable that
+         * resolves to such. The lack of a result can be signaled by
+         * returning undefined, null, or an empty array.
+         */
+        provideWorkspaceSymbols(query: string, token: CancellationToken | undefined): ProviderResult<SymbolInformation[]>;
+
+        /**
+         * Given a symbol fill in its [location](#SymbolInformation.location). This method is called whenever a symbol
+         * is selected in the UI. Providers can implement this method and return incomplete symbols from
+         * [`provideWorkspaceSymbols`](#WorkspaceSymbolProvider.provideWorkspaceSymbols) which often helps to improve
+         * performance.
+         *
+         * @param symbol The symbol that is to be resolved. Guaranteed to be an instance of an object returned from an
+         * earlier call to `provideWorkspaceSymbols`.
+         * @param token A cancellation token.
+         * @return The resolved symbol or a thenable that resolves to that. When no result is returned,
+         * the given `symbol` is used.
+         */
+        resolveWorkspaceSymbol?(symbol: SymbolInformation, token: CancellationToken | undefined): ProviderResult<SymbolInformation>;
+    }
+
+    /**
+     * Collapsible state of a [comment thread](#CommentThread)
+     */
+    export enum CommentThreadCollapsibleState {
+        /**
+         * Determines an item is collapsed
+         */
+        Collapsed = 0,
+
+        /**
+         * Determines an item is expanded
+         */
+        Expanded = 1
+    }
+
+    /**
+     * Comment mode of a [comment](#Comment)
+     */
+    export enum CommentMode {
+        /**
+         * Displays the comment editor
+         */
+        Editing = 0,
+
+        /**
+         * Displays the preview of the comment
+         */
+        Preview = 1
+    }
+
+    /**
+     * A collection of [comments](#Comment) representing a conversation at a particular range in a document.
+     */
+    export interface CommentThread {
+        /**
+         * A unique identifier of the comment thread.
+         */
+        readonly id: string;
+
+        /**
+         * The uri of the document the thread has been created on.
+         */
+        readonly resource: Uri;
+
+        /**
+         * The range the comment thread is located within the document. The thread icon will be shown
+         * at the first line of the range.
+         */
+        readonly range: Range;
+
+        /**
+         * The ordered comments of the thread.
+         */
+        comments: Comment[];
+
+        /**
+         * Whether the thread should be collapsed or expanded when opening the document.
+         * Defaults to Collapsed.
+         */
+        collapsibleState: CommentThreadCollapsibleState;
+
+        /**
+         * The optional human-readable label describing the [Comment Thread](#CommentThread)
+         */
+        label?: string;
+
+        /**
+         * Optional accept input command
+         *
+         * `acceptInputCommand` is the default action rendered on Comment Widget, which is always placed rightmost.
+         * This command will be invoked when users the user accepts the value in the comment editor.
+         * This command will disabled when the comment editor is empty.
+         */
+        acceptInputCommand?: Command;
+
+        /**
+         * Optional additonal commands.
+         *
+         * `additionalCommands` are the secondary actions rendered on Comment Widget.
+         */
+        additionalCommands?: Command[];
+
+        /**
+         * The command to be executed when users try to delete the comment thread. Currently, this is only called
+         * when the user collapses a comment thread that has no comments in it.
+         */
+        deleteCommand?: Command;
+
+        /**
+         * Dispose this comment thread.
+         *
+         * Once disposed, this comment thread will be removed from visible editors and Comment Panel when approriate.
+         */
+        dispose(): void;
+    }
+
+    /**
+     * Commenting range provider for a [comment controller](#CommentController).
+     */
+    export interface CommentingRangeProvider {
+        /**
+         * Provide a list of ranges which allow new comment threads creation or null for a given document
+         */
+        provideCommentingRanges(document: TextDocument, token: CancellationToken): ProviderResult<Range[]>;
+    }
+
+    /**
+     * Comment thread template for new comment thread creation.
+     */
+    export interface CommentThreadTemplate {
+        /**
+         * The human-readable label describing the [Comment Thread](#CommentThread)
+         */
+        readonly label: string;
+
+        /**
+         * Optional accept input command
+         *
+         * `acceptInputCommand` is the default action rendered on Comment Widget, which is always placed rightmost.
+         * This command will be invoked when users the user accepts the value in the comment editor.
+         * This command will disabled when the comment editor is empty.
+         */
+        readonly acceptInputCommand?: Command;
+
+        /**
+         * Optional additonal commands.
+         *
+         * `additionalCommands` are the secondary actions rendered on Comment Widget.
+         */
+        readonly additionalCommands?: Command[];
+
+        /**
+         * The command to be executed when users try to delete the comment thread. Currently, this is only called
+         * when the user collapses a comment thread that has no comments in it.
+         */
+        readonly deleteCommand?: Command;
+    }
+
+    /**
+     * The comment input box in Comment Widget.
+     */
+    export interface CommentInputBox {
+        /**
+         * Setter and getter for the contents of the comment input box
+         */
+        value: string;
+
+        /**
+         * The uri of the document comment input box has been created on
+         */
+        resource: Uri;
+
+        /**
+         * The range the comment input box is located within the document
+         */
+        range: Range;
+    }
+
+    /**
+     * A comment controller is able to provide [comments](#CommentThread) support to the editor and
+     * provide users various ways to interact with comments.
+     */
+    export interface CommentController {
+        /**
+         * The id of this comment controller.
+         */
+        readonly id: string;
+
+        /**
+         * The human-readable label of this comment controller.
+         */
+        readonly label: string;
+
+        /**
+         * The active [comment input box](#CommentInputBox) or `undefined`. The active `inputBox` is the input box of
+         * the comment thread widget that currently has focus. It's `undefined` when the focus is not in any CommentInputBox.
+         */
+        readonly inputBox: CommentInputBox | undefined;
+
+        /**
+         * Optional comment thread template information.
+         *
+         * The comment controller will use this information to create the comment widget when users attempt to create new comment thread
+         * from the gutter or command palette.
+         *
+         * When users run `CommentThreadTemplate.acceptInputCommand` or `CommentThreadTemplate.additionalCommands`, extensions should create
+         * the approriate [CommentThread](#CommentThread).
+         *
+         * If not provided, users won't be able to create new comment threads in the editor.
+         */
+        template?: CommentThreadTemplate;
+
+        /**
+         * Optional commenting range provider. Provide a list [ranges](#Range) which support commenting to any given resource uri.
+         *
+         * If not provided and `emptyCommentThreadFactory` exits, users can leave comments in any document opened in the editor.
+         */
+        commentingRangeProvider?: CommentingRangeProvider;
+
+        /**
+         * Create a [comment thread](#CommentThread). The comment thread will be displayed in visible text editors (if the resource matches)
+         * and Comments Panel once created.
+         *
+         * @param id An `id` for the comment thread.
+         * @param resource The uri of the document the thread has been created on.
+         * @param range The range the comment thread is located within the document.
+         * @param comments The ordered comments of the thread.
+         */
+        createCommentThread(id: string, resource: Uri, range: Range, comments: Comment[]): CommentThread;
+
+        /**
+         * Dispose this comment controller.
+         *
+         * Once disposed, all [comment threads](#CommentThread) created by this comment controller will also be removed from the editor
+         * and Comments Panel.
+         */
+        dispose(): void;
+    }
+
+    /**
+     * Author information of a [comment](#Comment)
+     */
+    export interface CommentAuthorInformation {
+        /**
+         * The display name of the author of the comment
+         */
+        name: string;
+
+        /**
+         * The optional icon path for the author
+         */
+        iconPath?: Uri;
+    }
+
+    /**
+     * Reactions of a [comment](#Comment)
+     */
+    export interface CommentReaction {
+        /**
+         * The human-readable label for the reaction
+         */
+        readonly label: string;
+
+        /**
+         * Icon for the reaction shown in UI.
+         */
+        readonly iconPath: string | Uri;
+
+        /**
+         * The number of users who have reacted to this reaction
+         */
+        readonly count: number;
+
+        /**
+         * Whether the [author](CommentAuthorInformation) of the comment has reacted to this reaction
+         */
+        readonly authorHasReacted: boolean;
+    }
+
+    /**
+     * A comment is displayed within the editor or the Comments Panel, depending on how it is provided.
+     */
+    export interface Comment {
+        /**
+         * The human-readable comment body
+         */
+        body: string | MarkdownString;
+
+        /**
+         * [Comment mode](#CommentMode) of the comment
+         */
+        mode: CommentMode;
+
+        /**
+         * The [author information](#CommentAuthorInformation) of the comment
+         */
+        author: CommentAuthorInformation;
+
+        /**
+         * Context value of the comment. This can be used to contribute comment specific actions.
+         * For example, a comment is given a context value as `editable`. When contributing actions to `comments/comment/title`
+         * using `menus` extension point, you can specify context value for key `comment` in `when` expression like `comment == editable`.
+         */
+        contextValue?: string;
+
+        /**
+         * Optional reactions of the [comment](#Comment)
+         */
+        reactions?: CommentReaction[];
+
+        /**
+         * Optional label describing the [Comment](#Comment)
+         * Label will be rendered next to authorName if exists.
+         */
+        label?: string;
+    }
+
+    namespace comment {
+        /**
+         * Creates a new [comment controller](#CommentController) instance.
+         *
+         * @param id An `id` for the comment controller.
+         * @param label A human-readable string for the comment controller.
+         * @return An instance of [comment controller](#CommentController).
+         */
+        export function createCommentController(id: string, label: string): CommentController;
+    }
+
+    /**
+	 * A selection range represents a part of a selection hierarchy. A selection range
+	 * may have a parent selection range that contains it.
+	 */
+    export class SelectionRange {
+
+		/**
+		 * The [range](#Range) of this selection range.
 		 */
-		export function registerDebugConfigurationProvider(debugType: string, provider: DebugConfigurationProvider): Disposable;
+        range: Range;
+
+		/**
+		 * The parent selection range containing this range.
+		 */
+        parent?: SelectionRange;
+
+		/**
+		 * Creates a new selection range.
+		 *
+		 * @param range The range of the selection range.
+		 * @param parent The parent of the selection range.
+		 */
+        constructor(range: Range, parent?: SelectionRange);
+    }
+
+    export interface SelectionRangeProvider {
+		/**
+		 * Provide selection ranges for the given positions.
+		 *
+		 * Selection ranges should be computed individually and independent for each position. The editor will merge
+		 * and deduplicate ranges but providers must return hierarchies of selection ranges so that a range
+		 * is [contained](#Range.contains) by its parent.
+		 *
+		 * @param document The document in which the command was invoked.
+		 * @param positions The positions at which the command was invoked.
+		 * @param token A cancellation token.
+		 * @return Selection ranges or a thenable that resolves to such. The lack of a result can be
+		 * signaled by returning `undefined` or `null`.
+		 */
+        provideSelectionRanges(document: TextDocument, positions: Position[], token: CancellationToken): ProviderResult<SelectionRange[]>;
+    }
+
+    /**
+	 * Represents programming constructs like functions or constructors in the context
+	 * of call hierarchy.
+	 */
+    export class CallHierarchyItem {
+		/**
+		 * The name of this item.
+		 */
+        name: string;
+
+		/**
+		 * The kind of this item.
+		 */
+        kind: SymbolKind;
+
+		/**
+		 * More detail for this item, e.g. the signature of a function.
+		 */
+        detail?: string;
+
+		/**
+		 * The resource identifier of this item.
+		 */
+        uri: Uri;
+
+		/**
+		 * The range enclosing this symbol not including leading/trailing whitespace but everything else, e.g. comments and code.
+		 */
+        range: Range;
+
+		/**
+		 * The range that should be selected and revealed when this symbol is being picked, e.g. the name of a function.
+		 * Must be contained by the [`range`](#CallHierarchyItem.range).
+		 */
+        selectionRange: Range;
+
+		/**
+		 * Creates a new call hierarchy item.
+		 */
+        constructor(kind: SymbolKind, name: string, detail: string, uri: Uri, range: Range, selectionRange: Range);
+    }
+
+	/**
+	 * Represents an incoming call, e.g. a caller of a method or constructor.
+	 */
+    export class CallHierarchyIncomingCall {
+
+		/**
+		 * The item that makes the call.
+		 */
+        from: CallHierarchyItem;
+
+		/**
+		 * The range at which at which the calls appears. This is relative to the caller
+		 * denoted by [`this.from`](#CallHierarchyIncomingCall.from).
+		 */
+        fromRanges: Range[];
+
+		/**
+		 * Create a new call object.
+		 *
+		 * @param item The item making the call.
+		 * @param fromRanges The ranges at which the calls appear.
+		 */
+        constructor(item: CallHierarchyItem, fromRanges: Range[]);
+    }
+
+	/**
+	 * Represents an outgoing call, e.g. calling a getter from a method or a method from a constructor etc.
+	 */
+    export class CallHierarchyOutgoingCall {
+
+		/**
+		 * The item that is called.
+		 */
+        to: CallHierarchyItem;
+
+		/**
+		 * The range at which this item is called. This is the range relative to the caller, e.g the item
+		 * passed to [`provideCallHierarchyOutgoingCalls`](#CallHierarchyItemProvider.provideCallHierarchyOutgoingCalls)
+		 * and not [`this.to`](#CallHierarchyOutgoingCall.to).
+		 */
+        fromRanges: Range[];
+
+		/**
+		 * Create a new call object.
+		 *
+		 * @param item The item being called
+		 * @param fromRanges The ranges at which the calls appear.
+		 */
+        constructor(item: CallHierarchyItem, fromRanges: Range[]);
+    }
+
+	/**
+	 * The call hierarchy provider interface describes the constract between extensions
+	 * and the call hierarchy feature which allows to browse calls and caller of function,
+	 * methods, constructor etc.
+	 */
+    export interface CallHierarchyProvider {
+
+		/**
+		 * Bootstraps call hierarchy by returning the item that is denoted by the given document
+		 * and position. This item will be used as entry into the call graph. Providers should
+		 * return `undefined` or `null` when there is no item at the given location.
+		 *
+		 * @param document The document in which the command was invoked.
+		 * @param position The position at which the command was invoked.
+		 * @param token A cancellation token.
+		 * @returns A call hierarchy item or a thenable that resolves to such. The lack of a result can be
+		 * signaled by returning `undefined` or `null`.
+		 */
+        prepareCallHierarchy(document: TextDocument, position: Position, token: CancellationToken): ProviderResult<CallHierarchyItem>;
+
+		/**
+		 * Provide all incoming calls for an item, e.g all callers for a method. In graph terms this describes directed
+		 * and annotated edges inside the call graph, e.g the given item is the starting node and the result is the nodes
+		 * that can be reached.
+		 *
+		 * @param item The hierarchy item for which incoming calls should be computed.
+		 * @param token A cancellation token.
+		 * @returns A set of incoming calls or a thenable that resolves to such. The lack of a result can be
+		 * signaled by returning `undefined` or `null`.
+		 */
+        provideCallHierarchyIncomingCalls(item: CallHierarchyItem, token: CancellationToken): ProviderResult<CallHierarchyIncomingCall[]>;
+
+		/**
+		 * Provide all outgoing calls for an item, e.g call calls to functions, methods, or constructors from the given item. In
+		 * graph terms this describes directed and annotated edges inside the call graph, e.g the given item is the starting
+		 * node and the result is the nodes that can be reached.
+		 *
+		 * @param item The hierarchy item for which outgoing calls should be computed.
+		 * @param token A cancellation token.
+		 * @returns A set of outgoing calls or a thenable that resolves to such. The lack of a result can be
+		 * signaled by returning `undefined` or `null`.
+		 */
+        provideCallHierarchyOutgoingCalls(item: CallHierarchyItem, token: CancellationToken): ProviderResult<CallHierarchyOutgoingCall[]>;
     }
 }
+

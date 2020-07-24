@@ -16,7 +16,10 @@
 
 import { ChildProcess } from 'child_process';
 import { Disposable } from '@theia/core';
-import { Repository, WorkingDirectoryStatus, Branch, GitResult, GitError, GitFileStatus, GitFileChange, CommitWithChanges, GitFileBlame } from './git-model';
+import {
+    Repository, WorkingDirectoryStatus, Branch, GitResult, GitError, GitFileStatus,
+    GitFileChange, CommitWithChanges, GitFileBlame, Remote as RemoteModel, StashEntry
+} from './git-model';
 
 /**
  * The WS endpoint path to the Git service.
@@ -296,6 +299,28 @@ export namespace Git {
         }
 
         /**
+         * Options for further refining the `git stash` command.
+         */
+        export interface Stash {
+            /**
+             * The kind of stash action.
+             */
+            readonly action?: 'push' | 'apply' | 'pop' | 'list' | 'drop' | 'clear';
+
+            /**
+             * The stash id.
+             * This is an optional argument for actions of kind 'apply', 'pop' and 'drop'.
+             */
+            readonly id?: string;
+
+            /**
+             * The stash message.
+             * This is an optional argument for the `push` action.
+             */
+            readonly message?: string;
+        }
+
+        /**
          * Options for the `git fetch` command.
          */
         export interface Fetch {
@@ -410,13 +435,13 @@ export namespace Git {
              * The exit codes which indicate success to the caller. Unexpected exit codes will be logged and an
              * error thrown. Defaults to `0` if `undefined`.
              */
-            readonly successExitCodes?: ReadonlySet<number>;
+            readonly successExitCodes?: ReadonlyArray<number>;
 
             /**
              * The Git errors which are expected by the caller. Unexpected errors will
              * be logged and an error thrown.
              */
-            readonly expectedErrors?: ReadonlySet<GitError>;
+            readonly expectedErrors?: ReadonlyArray<GitError>;
 
             /**
              * An optional collection of key-value pairs which will be
@@ -521,7 +546,6 @@ export namespace Git {
              * Decides whether the commit hash should be the abbreviated version.
              */
             readonly shortSha?: boolean;
-
         }
 
         /**
@@ -546,8 +570,31 @@ export namespace Git {
 
         }
 
-    }
+        /**
+         * Options for the `git remote` command.
+         */
+        export interface Remote {
 
+            /**
+             * Be more verbose and get remote url for `fetch` and `push` actions.
+             */
+            readonly verbose?: true,
+
+        }
+
+        /**
+         * Options for the `git rev-parse` command.
+         */
+        export interface RevParse {
+
+            /**
+             * The reference to parse.
+             */
+            readonly ref: string;
+
+        }
+
+    }
 }
 
 /**
@@ -616,10 +663,13 @@ export interface Git extends Disposable {
      * @param the repository where the branch modification has to be performed.
      * @param options further Git command refinements for the branch modification.
      */
+    /* eslint-disable @typescript-eslint/indent */
     branch(repository: Repository, options:
         Git.Options.BranchCommand.Create |
         Git.Options.BranchCommand.Rename |
-        Git.Options.BranchCommand.Delete): Promise<void>;
+        Git.Options.BranchCommand.Delete
+    ): Promise<void>;
+    /* eslint-enable @typescript-eslint/indent */
 
     /**
      * Switches branches or restores working tree files.
@@ -691,11 +741,48 @@ export interface Git extends Disposable {
     show(repository: Repository, uri: string, options?: Git.Options.Show): Promise<string>;
 
     /**
-     * It resolves to an array of configured remotes for the given repository.
+     * The default `git stash` command. Equivalent to `git stash push`. If the `message` is not defined, the Git default *WIP on branchname* will be used instead.
+     */
+    stash(repository: Repository, options?: Readonly<{ action?: 'push', message?: string }>): Promise<void>;
+
+    /**
+     * Resolves to an array of stashed entries that you currently have. Same as `git stash list`.
+     */
+    stash(repository: Repository, options: Readonly<{ action: 'list' }>): Promise<StashEntry[]>;
+
+    /**
+     * Removes all the stash entries.
+     */
+    stash(repository: Repository, options: Readonly<{ action: 'clear' }>): Promise<void>;
+
+    /**
+     * Performs stash actions depending on given action option.
+     * pop:
+     * Removes a single stashed state from the stash list and applies it on top of the current working tree state.
+     * The single stashed state is identified by the optional `id`. If the `id` is not defined the latest stash will be popped.
      *
-     * @param repository the repository to get the remotes.
+     * apply:
+     * Like `git stash pop`, but does not remove the state from the stash list.
+     *
+     * drop:
+     * Removes a single stash entry from the list of stash entries. When the `id` is not given, it removes the latest one.
+     */
+    stash(repository: Repository, options: Readonly<{ action: 'apply' | 'pop' | 'drop', id?: string }>): Promise<void>;
+
+    /**
+     * It resolves to an array of configured remotes names for the given repository.
+     *
+     * @param repository the repository to get the remote names.
      */
     remote(repository: Repository): Promise<string[]>;
+
+    /**
+     * It resolves to an array of configured remote objects for the given Git action.
+     *
+     * @param repository the repository to get the remote objects.
+     * @param options `git remote` command refinements.
+     */
+    remote(repository: Repository, options: { verbose: true }): Promise<RemoteModel[]>;
 
     /**
      * Executes the Git command and resolves to the result. If an executed Git command exits with a code that is not in the `successExitCodes` or an error not in `expectedErrors`,
@@ -725,6 +812,15 @@ export interface Git extends Disposable {
     log(repository: Repository, options?: Git.Options.Log): Promise<CommitWithChanges[]>;
 
     /**
+     * Returns the commit SHA of the given ref if the ref exists, or returns 'undefined' if the
+     * given ref does not exist.
+     *
+     * @param repository the repository where the ref may be found.
+     * @param options configuration containing the ref and optionally other properties for further refining the `git rev-parse` command execution.
+     */
+    revParse(repository: Repository, options: Git.Options.RevParse): Promise<string | undefined>;
+
+    /**
      * Returns the annotations of each line in the given file.
      *
      * @param repository the repository which contains the given file.
@@ -744,7 +840,7 @@ export interface Git extends Disposable {
      * @param uri the URI of the file to check.
      * @param options further options for the command executions.
      */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     lsFiles(repository: Repository, uri: string, options?: Git.Options.LsFiles): Promise<any>;
 
 }
@@ -757,7 +853,7 @@ export namespace GitUtils {
     /**
      * `true` if the argument is an option for renaming an existing branch in the repository.
      */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     export function isBranchRename(arg: any | undefined): arg is Git.Options.BranchCommand.Rename {
         return !!arg && ('newName' in arg);
     }
@@ -765,7 +861,7 @@ export namespace GitUtils {
     /**
      * `true` if the argument is an option for deleting an existing branch in the repository.
      */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     export function isBranchDelete(arg: any | undefined): arg is Git.Options.BranchCommand.Delete {
         return !!arg && ('toDelete' in arg);
     }
@@ -773,7 +869,7 @@ export namespace GitUtils {
     /**
      * `true` if the argument is an option for creating a new branch in the repository.
      */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     export function isBranchCreate(arg: any | undefined): arg is Git.Options.BranchCommand.Create {
         return !!arg && ('toCreate' in arg);
     }
@@ -781,7 +877,7 @@ export namespace GitUtils {
     /**
      * `true` if the argument is an option for listing the branches in a repository.
      */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     export function isBranchList(arg: any | undefined): arg is Git.Options.BranchCommand.List {
         return !!arg && ('type' in arg);
     }
@@ -789,7 +885,7 @@ export namespace GitUtils {
     /**
      * `true` if the argument is an option for checking out a new local branch.
      */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     export function isBranchCheckout(arg: any | undefined): arg is Git.Options.Checkout.CheckoutBranch {
         return !!arg && ('branch' in arg);
     }
@@ -797,7 +893,7 @@ export namespace GitUtils {
     /**
      * `true` if the argument is an option for checking out a working tree file.
      */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     export function isWorkingTreeFileCheckout(arg: any | undefined): arg is Git.Options.Checkout.WorkingTreeFile {
         return !!arg && ('paths' in arg);
     }
@@ -811,12 +907,12 @@ export namespace GitUtils {
      * `true` if the argument is an error indicating the absence of a local Git repository.
      * Otherwise, `false`.
      */
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     export function isRepositoryDoesNotExistError(error: any | undefined): boolean {
         // TODO this is odd here.This piece of code is already implementation specific, so this should go to the Git API.
         // But how can we ensure that the `any` type error is serializable?
         if (error instanceof Error && ('code' in error)) {
-            // tslint:disable-next-line:no-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             return (<any>error).code === RepositoryDoesNotExistErrorCode;
         }
         return false;

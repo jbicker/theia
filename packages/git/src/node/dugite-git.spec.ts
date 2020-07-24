@@ -14,8 +14,9 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import * as path from 'path';
 import * as upath from 'upath';
+
+import * as path from 'path';
 import * as temp from 'temp';
 import * as fs from 'fs-extra';
 import { expect } from 'chai';
@@ -25,13 +26,13 @@ import { FileUri } from '@theia/core/lib/node/file-uri';
 import { WorkingDirectoryStatus, Repository, GitUtils, GitFileStatus, GitFileChange } from '../common';
 import { initRepository, createTestRepository } from 'dugite-extra/lib/command/test-helper';
 import { createGit } from './test/binding-helper';
+import { isWindows } from '@theia/core/lib/common/os';
 
-// tslint:disable:no-unused-expression
-// tslint:disable:max-line-length
+/* eslint-disable max-len, no-unused-expressions */
 
 const track = temp.track();
 
-describe('git', async function () {
+describe('git', async function (): Promise<void> {
 
     this.timeout(10000);
 
@@ -47,10 +48,10 @@ describe('git', async function () {
             fs.mkdirSync(path.join(root, 'A'));
             fs.mkdirSync(path.join(root, 'B'));
             fs.mkdirSync(path.join(root, 'C'));
+            const git = await createGit();
             await initRepository(path.join(root, 'A'));
             await initRepository(path.join(root, 'B'));
             await initRepository(path.join(root, 'C'));
-            const git = await createGit();
             const workspaceRootUri = FileUri.create(root).toString();
             const repositories = await git.repositories(workspaceRootUri, { maxCount: 1 });
             expect(repositories.length).to.deep.equal(1);
@@ -63,28 +64,33 @@ describe('git', async function () {
             fs.mkdirSync(path.join(root, 'A'));
             fs.mkdirSync(path.join(root, 'B'));
             fs.mkdirSync(path.join(root, 'C'));
+            const git = await createGit();
             await initRepository(path.join(root, 'A'));
             await initRepository(path.join(root, 'B'));
             await initRepository(path.join(root, 'C'));
-            const git = await createGit();
             const workspaceRootUri = FileUri.create(root).toString();
             const repositories = await git.repositories(workspaceRootUri, {});
             expect(repositories.map(r => path.basename(FileUri.fsPath(r.localUri))).sort()).to.deep.equal(['A', 'B', 'C']);
 
         });
 
-        it('should discover all nested repositories and the root repository which is at the workspace root', async () => {
+        it('should discover all nested repositories and the root repository which is at the workspace root', async function (): Promise<void> {
+            if (isWindows) {
+                // https://github.com/eclipse-theia/theia/issues/933
+                this.skip();
+                return;
+            }
 
             const root = track.mkdirSync('discovery-test-3');
             fs.mkdirSync(path.join(root, 'BASE'));
             fs.mkdirSync(path.join(root, 'BASE', 'A'));
             fs.mkdirSync(path.join(root, 'BASE', 'B'));
             fs.mkdirSync(path.join(root, 'BASE', 'C'));
+            const git = await createGit();
             await initRepository(path.join(root, 'BASE'));
             await initRepository(path.join(root, 'BASE', 'A'));
             await initRepository(path.join(root, 'BASE', 'B'));
             await initRepository(path.join(root, 'BASE', 'C'));
-            const git = await createGit();
             const workspaceRootUri = FileUri.create(path.join(root, 'BASE')).toString();
             const repositories = await git.repositories(workspaceRootUri, {});
             expect(repositories.map(r => path.basename(FileUri.fsPath(r.localUri))).sort()).to.deep.equal(['A', 'B', 'BASE', 'C']);
@@ -99,11 +105,11 @@ describe('git', async function () {
             fs.mkdirSync(path.join(root, 'BASE', 'WS_ROOT', 'A'));
             fs.mkdirSync(path.join(root, 'BASE', 'WS_ROOT', 'B'));
             fs.mkdirSync(path.join(root, 'BASE', 'WS_ROOT', 'C'));
+            const git = await createGit();
             await initRepository(path.join(root, 'BASE'));
             await initRepository(path.join(root, 'BASE', 'WS_ROOT', 'A'));
             await initRepository(path.join(root, 'BASE', 'WS_ROOT', 'B'));
             await initRepository(path.join(root, 'BASE', 'WS_ROOT', 'C'));
-            const git = await createGit();
             const workspaceRootUri = FileUri.create(path.join(root, 'BASE', 'WS_ROOT')).toString();
             const repositories = await git.repositories(workspaceRootUri, {});
             const repositoryNames = repositories.map(r => path.basename(FileUri.fsPath(r.localUri)));
@@ -379,10 +385,10 @@ describe('git', async function () {
 
         const init = async (git: Git, repository: Repository) => {
             await git.exec(repository, ['init']);
-            if ((await git.exec(repository, ['config', 'user.name'], { successExitCodes: new Set([0, 1]) })).exitCode !== 0) {
+            if ((await git.exec(repository, ['config', 'user.name'], { successExitCodes: [0, 1] })).exitCode !== 0) {
                 await git.exec(repository, ['config', 'user.name', 'User Name']);
             }
-            if ((await git.exec(repository, ['config', 'user.email'], { successExitCodes: new Set([0, 1]) })).exitCode !== 0) {
+            if ((await git.exec(repository, ['config', 'user.email'], { successExitCodes: [0, 1] })).exitCode !== 0) {
                 await git.exec(repository, ['config', 'user.email', 'user.name@domain.com']);
             }
         };
@@ -540,10 +546,10 @@ describe('git', async function () {
     describe('diff', async () => {
         const init = async (git: Git, repository: Repository) => {
             await git.exec(repository, ['init']);
-            if ((await git.exec(repository, ['config', 'user.name'], { successExitCodes: new Set([0, 1]) })).exitCode !== 0) {
+            if ((await git.exec(repository, ['config', 'user.name'], { successExitCodes: [0, 1] })).exitCode !== 0) {
                 await git.exec(repository, ['config', 'user.name', 'User Name']);
             }
-            if ((await git.exec(repository, ['config', 'user.email'], { successExitCodes: new Set([0, 1]) })).exitCode !== 0) {
+            if ((await git.exec(repository, ['config', 'user.email'], { successExitCodes: [0, 1] })).exitCode !== 0) {
                 await git.exec(repository, ['config', 'user.email', 'user.name@domain.com']);
             }
         };
@@ -558,7 +564,7 @@ describe('git', async function () {
 
             await init(git, repository);
 
-            const expectDiff: (expected: ChangeDelta[]) => void = async expected => {
+            const expectDiff: (expected: ChangeDelta[]) => Promise<void> = async expected => {
                 const actual = (await git.diff(repository)).map(change => ChangeDelta.map(repository, change)).sort(ChangeDelta.compare);
                 expect(actual).to.be.deep.equal(expected);
             };
@@ -587,7 +593,7 @@ describe('git', async function () {
 
             await init(git, repository);
 
-            const expectDiff: (expected: ChangeDelta[]) => void = async expected => {
+            const expectDiff: (expected: ChangeDelta[]) => Promise<void> = async expected => {
                 const actual = (await git.diff(repository)).map(change => ChangeDelta.map(repository, change)).sort(ChangeDelta.compare);
                 expect(actual).to.be.deep.equal(expected);
             };
@@ -626,7 +632,7 @@ describe('git', async function () {
 
             await init(git, repository);
 
-            const expectDiff: (fromRevision: string, toRevision: string, expected: ChangeDelta[], filePath?: string) => void = async (fromRevision, toRevision, expected, filePath) => {
+            const expectDiff: (fromRevision: string, toRevision: string, expected: ChangeDelta[], filePath?: string) => Promise<void> = async (fromRevision, toRevision, expected, filePath) => {
                 const range = { fromRevision, toRevision };
                 let uri: string | undefined;
                 if (filePath) {
@@ -695,14 +701,14 @@ describe('git', async function () {
             await expectDiff('HEAD~4', 'HEAD', [
                 { pathSegment: 'folder/F1.txt', status: GitFileStatus.Deleted },
                 { pathSegment: 'folder/F2.txt', status: GitFileStatus.Modified },
-                { pathSegment: 'folder/F3 with space.txt', status: GitFileStatus.New }],
-                'folder');
+                { pathSegment: 'folder/F3 with space.txt', status: GitFileStatus.New },
+            ], 'folder');
 
             // Filter for a single file.
             await expectDiff('HEAD~4', 'HEAD~3', [], 'folder/F1.txt');
             await expectDiff('HEAD~4', 'HEAD', [
-                { pathSegment: 'folder/F1.txt', status: GitFileStatus.Deleted }],
-                'folder/F1.txt');
+                { pathSegment: 'folder/F1.txt', status: GitFileStatus.Deleted },
+            ], 'folder/F1.txt');
 
             // Filter for a non-existing file.
             await expectDiff('HEAD~4', 'HEAD~3', [], 'does not exist');
@@ -713,7 +719,12 @@ describe('git', async function () {
 
     describe('branch', () => {
 
-        it('should list the branch in chronological order', async () => {
+        // Skip the test case as it is dependent on the git version.
+        it.skip('should list the branch in chronological order', async function (): Promise<void> {
+            if (isWindows) {
+                this.skip(); // https://github.com/eclipse-theia/theia/issues/8023
+                return;
+            }
             const root = track.mkdirSync('branch-order');
             const localUri = FileUri.create(root).toString();
             const repository = { localUri };
@@ -741,8 +752,8 @@ describe('git', async function () {
         before(async () => {
             root = track.mkdirSync('ls-files');
             localUri = FileUri.create(root).toString();
-            await createTestRepository(root);
             git = await createGit();
+            await createTestRepository(root);
         });
 
         ([
@@ -763,41 +774,27 @@ describe('git', async function () {
 
 });
 
-describe('log', function () {
+describe('log', function (): void {
 
-    this.timeout(10000);
-
-    async function testLogFromRepoRoot(testLocalGit: string) {
-        const savedValue = process.env.USE_LOCAL_GIT;
-        try {
-            process.env.USE_LOCAL_GIT = testLocalGit;
-            const root = await createTestRepository(track.mkdirSync('log-test'));
-            const localUri = FileUri.create(root).toString();
-            const repository = { localUri };
-            const git = await createGit();
-            const result = await git.log(repository, { uri: localUri });
-            expect(result.length === 1).to.be.true;
-            expect(result[0].author.email === 'jon@doe.com').to.be.true;
-        } catch (err) {
-            throw err;
-        } finally {
-            process.env.USE_LOCAL_GIT = savedValue;
-        }
-    }
-
-    // See https://github.com/theia-ide/theia/issues/2143
-    it('should not fail with embedded git when executed from the repository root', async () => {
-        await testLogFromRepoRoot('false');
+    // See https://github.com/eclipse-theia/theia/issues/2143
+    it('should not fail when executed from the repository root', async () => {
+        const git = await createGit();
+        const root = await createTestRepository(track.mkdirSync('log-test'));
+        const localUri = FileUri.create(root).toString();
+        const repository = { localUri };
+        const result = await git.log(repository, { uri: localUri });
+        expect(result.length).to.be.equal(1);
+        expect(result[0].author.email).to.be.equal('jon@doe.com');
     });
 
-    // See https://github.com/theia-ide/theia/issues/2143
-    it('should not fail with local git when executed from the repository root', async () => {
-        await testLogFromRepoRoot('true');
+    it('should not fail when executed against an empty repository', async () => {
+        const git = await createGit();
+        const root = await initRepository(track.mkdirSync('empty-log-test'));
+        const localUri = FileUri.create(root).toString();
+        const repository = { localUri };
+        const result = await git.log(repository, { uri: localUri });
+        expect(result.length).to.be.equal(0);
     });
-
-    // THE ABOVE TEST SHOULD ALWAYS BE THE LAST GIT TEST RUN.
-    // It changes the underlying git to be the local git, which can't be
-    // undone. (See https://github.com/theia-ide/theia/issues/2246).
 });
 
 function toPathSegment(repository: Repository, uri: string): string {

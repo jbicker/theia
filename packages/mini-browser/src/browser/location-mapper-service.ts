@@ -59,7 +59,7 @@ export class LocationMapperService {
     }
 
     protected defaultMapper(): (location: string) => MaybePromise<string> {
-        return location => `http://${location}`;
+        return location => `${new Endpoint().httpScheme}//${location}`;
     }
 
     protected async prioritize(location: string): Promise<LocationMapper[]> {
@@ -105,10 +105,20 @@ export class HttpsLocationMapper implements LocationMapper {
 
 }
 
-export class MiniBrowserEndpoint extends Endpoint {
-    constructor() {
-        super({ path: 'mini-browser' });
+/**
+ * Location mapper for locations without a scheme.
+ */
+@injectable()
+export class LocationWithoutSchemeMapper implements LocationMapper {
+
+    canHandle(location: string): MaybePromise<number> {
+        return new URI(location).scheme === '' ? 1 : 0;
     }
+
+    map(location: string): MaybePromise<string> {
+        return `http://${location}`;
+    }
+
 }
 
 /**
@@ -126,11 +136,17 @@ export class FileLocationMapper implements LocationMapper {
         if (uri.scheme !== 'file') {
             throw new Error(`Only URIs with 'file' scheme can be mapped to an URL. URI was: ${uri}.`);
         }
-        let rawLocation = uri.withoutScheme().toString();
+        let rawLocation = uri.path.toString();
         if (rawLocation.charAt(0) === '/') {
             rawLocation = rawLocation.substr(1);
         }
         return new MiniBrowserEndpoint().getRestUrl().resolve(rawLocation).toString();
     }
 
+}
+
+export class MiniBrowserEndpoint extends Endpoint {
+    constructor() {
+        super({ path: 'mini-browser' });
+    }
 }

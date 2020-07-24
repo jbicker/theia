@@ -22,12 +22,14 @@ export class PluginDeployerResolverContextImpl<T> implements PluginDeployerResol
     /**
      * Name of the resolver for this context
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private resolverName: any;
 
     private pluginEntries: PluginDeployerEntry[];
 
     constructor(resolver: T, private readonly sourceId: string) {
         this.pluginEntries = [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.resolverName = (resolver as any).constructor.name;
 
     }

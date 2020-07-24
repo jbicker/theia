@@ -13,14 +13,16 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
-import { BackendApplicationContribution } from '@theia/core/lib/node/backend-application';
-import { inject, injectable, optional, multiInject } from 'inversify';
+
+import * as path from 'path';
 import * as express from 'express';
-import * as fs from 'fs';
-import { resolve } from 'path';
-import { MetadataScanner } from './metadata-scanner';
-import { PluginMetadata, PluginPackage, getPluginId, MetadataProcessor } from '../../common/plugin-protocol';
+import * as escape_html from 'escape-html';
 import { ILogger } from '@theia/core';
+import { inject, injectable, optional, multiInject } from 'inversify';
+import { BackendApplicationContribution } from '@theia/core/lib/node/backend-application';
+import { PluginMetadata, getPluginId, MetadataProcessor, PluginPackage, PluginContribution } from '../../common/plugin-protocol';
+import { MetadataScanner } from './metadata-scanner';
+import { loadManifest } from './plugin-manifest-loader';
 
 @injectable()
 export class HostedPluginReader implements BackendApplicationContribution {
@@ -28,60 +30,81 @@ export class HostedPluginReader implements BackendApplicationContribution {
     @inject(ILogger)
     protected readonly logger: ILogger;
 
-    @inject(MetadataScanner) private readonly scanner: MetadataScanner;
-    private plugin: PluginMetadata | undefined;
+    @inject(MetadataScanner)
+    protected readonly scanner: MetadataScanner;
 
     @optional()
     @multiInject(MetadataProcessor) private readonly metadataProcessors: MetadataProcessor[];
 
     /**
-     * Map between a plugin's id and the local storage
+     * Map between a plugin id and its local storage
      */
-    private pluginsIdsFiles: Map<string, string> = new Map();
-
-    initialize(): void {
-        if (process.env.HOSTED_PLUGIN) {
-            let pluginPath = process.env.HOSTED_PLUGIN;
-            if (pluginPath) {
-                if (!pluginPath.endsWith('/')) {
-                    pluginPath += '/';
-                }
-                this.plugin = this.getPluginMetadata(pluginPath);
-            }
-        }
-    }
+    protected pluginsIdsFiles: Map<string, string> = new Map();
 
     configure(app: express.Application): void {
-        app.get('/hostedPlugin/:pluginId/:path(*)', (req, res) => {
+        app.get('/hostedPlugin/:pluginId/:path(*)', async (req, res) => {
             const pluginId = req.params.pluginId;
-            const filePath: string = req.params.path;
+            const filePath = req.params.path;
 
-            const localPath: string | undefined = this.pluginsIdsFiles.get(pluginId);
+            const localPath = this.pluginsIdsFiles.get(pluginId);
             if (localPath) {
-                const fileToServe = localPath + filePath;
-                res.sendFile(fileToServe);
+                res.sendFile(filePath, { root: localPath }, e => {
+                    if (!e) {
+                        // the file was found and successfully transferred
+                        return;
+                    }
+                    console.error(`Could not transfer '${filePath}' file from '${pluginId}'`, e);
+                    if (res.headersSent) {
+                        // the request was already closed
+                        return;
+                    }
+                    if ('code' in e && e['code'] === 'ENOENT') {
+                        res.status(404).send(`No such file found in '${escape_html(pluginId)}' plugin.`);
+                    } else {
+                        res.status(500).send(`Failed to transfer a file from '${escape_html(pluginId)}' plugin.`);
+                    }
+                });
             } else {
-                res.status(404).send("The plugin with id '" + pluginId + "' does not exist.");
+                await this.handleMissingResource(req, res);
             }
         });
     }
 
-    public getPluginMetadata(path: string): PluginMetadata | undefined {
-        if (!path.endsWith('/')) {
-            path += '/';
-        }
-        const packageJsonPath = path + 'package.json';
-        if (!fs.existsSync(packageJsonPath)) {
+    protected async handleMissingResource(req: express.Request, res: express.Response): Promise<void> {
+        const pluginId = req.params.pluginId;
+        res.status(404).send(`The plugin with id '${escape_html(pluginId)}' does not exist.`);
+    }
+
+    /**
+     * @throws never
+     */
+    async getPluginMetadata(pluginPath: string | undefined): Promise<PluginMetadata | undefined> {
+        try {
+            const manifest = await this.readPackage(pluginPath);
+            return manifest && this.readMetadata(manifest);
+        } catch (e) {
+            this.logger.error(`Failed to load plugin metadata from "${pluginPath}"`, e);
             return undefined;
         }
+    }
 
-        const plugin: PluginPackage = require(packageJsonPath);
-        plugin.packagePath = path;
+    async readPackage(pluginPath: string | undefined): Promise<PluginPackage | undefined> {
+        if (!pluginPath) {
+            return undefined;
+        }
+        const manifest = await loadManifest(pluginPath);
+        if (!manifest) {
+            return undefined;
+        }
+        manifest.packagePath = pluginPath;
+        return manifest;
+    }
+
+    readMetadata(plugin: PluginPackage): PluginMetadata {
         const pluginMetadata = this.scanner.getPluginMetadata(plugin);
         if (pluginMetadata.model.entryPoint.backend) {
-            pluginMetadata.model.entryPoint.backend = resolve(path, pluginMetadata.model.entryPoint.backend);
+            pluginMetadata.model.entryPoint.backend = path.resolve(plugin.packagePath, pluginMetadata.model.entryPoint.backend);
         }
-
         if (pluginMetadata) {
             // Add post processor
             if (this.metadataProcessors) {
@@ -89,14 +112,19 @@ export class HostedPluginReader implements BackendApplicationContribution {
                     metadataProcessor.process(pluginMetadata);
                 });
             }
-            this.pluginsIdsFiles.set(getPluginId(pluginMetadata.model), path);
+            this.pluginsIdsFiles.set(getPluginId(pluginMetadata.model), plugin.packagePath);
         }
-
         return pluginMetadata;
     }
 
-    getPlugin(): PluginMetadata | undefined {
-        return this.plugin;
+    readContribution(plugin: PluginPackage): PluginContribution | undefined {
+        const scanner = this.scanner.getScanner(plugin);
+        return scanner.getContribution(plugin);
+    }
+
+    readDependencies(plugin: PluginPackage): Map<string, string> | undefined {
+        const scanner = this.scanner.getScanner(plugin);
+        return scanner.getDependencies(plugin);
     }
 
 }

@@ -14,8 +14,8 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { TextEditorsExt, EditorChangedPropertiesData, TextEditorPositionData, TextEditorsMain, PLUGIN_RPC_CONTEXT } from '../api/plugin-api';
-import { RPCProtocol } from '../api/rpc-protocol';
+import { TextEditorsExt, EditorChangedPropertiesData, TextEditorPositionData, TextEditorsMain, PLUGIN_RPC_CONTEXT } from '../common/plugin-api-rpc';
+import { RPCProtocol } from '../common/rpc-protocol';
 import * as theia from '@theia/plugin';
 import { Emitter, Event } from '@theia/core/lib/common/event';
 import { EditorsAndDocumentsExtImpl } from './editors-and-documents';
@@ -119,6 +119,15 @@ export class TextEditorsExtImpl implements TextEditorsExt {
         return new TextEditorDecorationType(this.proxy, options);
     }
 
+    applyWorkspaceEdit(edit: theia.WorkspaceEdit): Promise<boolean> {
+        const dto = Converters.fromWorkspaceEdit(edit, this.editorsAndDocuments);
+        return this.proxy.$tryApplyWorkspaceEdit(dto);
+    }
+
+    saveAll(includeUntitled?: boolean): PromiseLike<boolean> {
+        return this.proxy.$saveAll(includeUntitled);
+    }
+
 }
 
 export class TextEditorDecorationType implements theia.TextEditorDecorationType {
@@ -131,8 +140,8 @@ export class TextEditorDecorationType implements theia.TextEditorDecorationType 
     constructor(proxy: TextEditorsMain, options: theia.DecorationRenderOptions) {
         this.key = TextEditorDecorationType.Keys.nextId();
         this.proxy = proxy;
-        // tslint:disable-next-line:no-any
-        this.proxy.$registerTextEditorDecorationType(this.key, <any>options);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.proxy.$registerTextEditorDecorationType(this.key, Converters.DecorationRenderOptions.from(options));
     }
 
     dispose(): void {

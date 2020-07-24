@@ -17,7 +17,7 @@
 import { ILanguageClient } from '@theia/languages/lib/browser';
 import {
     ReferencesRequest, DocumentSymbolRequest, DefinitionRequest, TextDocumentPositionParams,
-    TextDocumentIdentifier, SymbolInformation, Location, Position, DocumentSymbol, ReferenceParams
+    TextDocumentIdentifier, SymbolInformation, Location, Position, DocumentSymbol, ReferenceParams, LocationLink, DocumentUri
 } from 'monaco-languageclient/lib/services';
 import * as utils from './utils';
 import { ILogger, Disposable } from '@theia/core';
@@ -46,31 +46,34 @@ export class CallHierarchyContext implements Disposable {
         return symbols;
     }
 
+    // tslint:disable-next-line:typedef
     async getEditorModelReference(uri: string) {
         const model = await this.textModelService.createModelReference(new URI(uri));
         this.disposables.push(model);
         return model;
     }
 
-    async getDefinitionLocation(location: Location): Promise<Location | undefined> {
-        const uri = location.uri;
-        const { line, character } = location.range.start;
+    async getDefinitionLocation(uri: DocumentUri, position: Position): Promise<Location | undefined> {
 
         // Definition can be null
-        // tslint:disable-next-line:no-null-keyword
-        let locations: Location | Location[] | null = null;
+        // eslint-disable-next-line no-null/no-null
+        let locations: Location | Location[] | LocationLink[] | null = null;
         try {
             locations = await this.languageClient.sendRequest(DefinitionRequest.type, <TextDocumentPositionParams>{
-                position: Position.create(line, character),
+                position: position,
                 textDocument: { uri }
             });
         } catch (error) {
-            this.logger.error(`Error from definitions request: ${uri}#${line}/${character}`, error);
+            this.logger.error(`Error from definitions request: ${uri}#${position.line}/${position.character}`, error);
         }
         if (!locations) {
             return undefined;
         }
-        return Array.isArray(locations) ? locations[0] : locations;
+        const targetLocation = Array.isArray(locations) ? locations[0] : locations;
+        return LocationLink.is(targetLocation) ? {
+            uri: targetLocation.targetUri,
+            range: targetLocation.targetSelectionRange
+        } : targetLocation;
     }
 
     async getCallerReferences(definition: Location): Promise<Location[]> {
@@ -96,7 +99,7 @@ export class CallHierarchyContext implements Disposable {
         }
     }
 
-    dispose() {
+    dispose(): void {
         this.disposables.forEach(element => {
             element.dispose();
         });

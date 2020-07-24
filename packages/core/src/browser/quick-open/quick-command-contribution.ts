@@ -21,8 +21,12 @@ import { PrefixQuickOpenService, QuickOpenHandlerRegistry } from './prefix-quick
 import { CommonMenus } from '../common-frontend-contribution';
 
 export const quickCommand: Command = {
-    id: 'quickCommand',
-    label: 'Find Command ...'
+    id: 'workbench.action.showCommands'
+};
+
+export const CLEAR_COMMAND_HISTORY: Command = {
+    id: 'clear.command.history',
+    label: 'Clear Command History'
 };
 
 @injectable()
@@ -37,11 +41,15 @@ export class QuickCommandFrontendContribution implements CommandContribution, Ke
         commands.registerCommand(quickCommand, {
             execute: () => this.quickOpenService.open('>')
         });
+        commands.registerCommand(CLEAR_COMMAND_HISTORY, {
+            execute: () => commands.clearCommandHistory(),
+        });
     }
 
     registerMenus(menus: MenuModelRegistry): void {
         menus.registerMenuAction(CommonMenus.VIEW_PRIMARY, {
-            commandId: quickCommand.id
+            commandId: quickCommand.id,
+            label: 'Find Command...'
         });
     }
 

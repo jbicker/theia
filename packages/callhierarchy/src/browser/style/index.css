@@ -16,7 +16,6 @@
 
 .theia-CallHierarchyTree {
     font-size: var(--theia-ui-font-size1);
-    color: var(--theia-ui-font-color1);
 }
 
 .theia-CallHierarchyTree .theia-TreeNode {
@@ -24,11 +23,8 @@
 }
 
 .theia-CallHierarchyTree .theia-ExpansionToggle {
-    min-width: 16px;
-}
-
-.theia-CallHierarchyTree .noCallers {
-    margin: 5px;
+    min-width: 9px;
+    padding-right: 4px;
 }
 
 .theia-CallHierarchyTree .definitionNode {
@@ -44,23 +40,23 @@
 }
 
 .theia-CallHierarchyTree .definitionNode .symbol {
-    white-space: nowrap;
-    overflow: hidden;
+    padding-right: 4px;
 }
 
 .theia-CallHierarchyTree .definitionNode .referenceCount {
-    white-space: nowrap;
-    overflow: hidden;
-    color: var(--theia-ui-font-color3);
+    color: var(--theia-badge-background);
 }
 
 .theia-CallHierarchyTree .definitionNode .container {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--theia-ui-font-color2);
+    color: var(--theia-descriptionForeground);
 }
 
 .call-hierarchy-tab-icon::before {
     content: "\f0ab"
+}
+
+.theia-CallHierarchyTree .definitionNode-content {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }

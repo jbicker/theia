@@ -27,13 +27,25 @@ export interface Language {
     readonly filenames: Set<string>;
 }
 
+export interface WorkspaceSymbolProvider extends services.WorkspaceSymbolProvider {
+    resolveWorkspaceSymbol?(symbol: services.SymbolInformation, token: services.CancellationToken): Thenable<services.SymbolInformation | undefined>
+}
+
+/**
+ * @deprecated since 1.4.0 - in order to remove monaco-languageclient, use VS Code extensions to contribute language smartness:
+ * https://code.visualstudio.com/api/language-extensions/language-server-extension-guide
+ */
 export const Languages = Symbol('Languages');
 export interface Languages extends services.Languages {
-    readonly workspaceSymbolProviders?: services.WorkspaceSymbolProvider[];
+    readonly workspaceSymbolProviders?: WorkspaceSymbolProvider[];
     readonly languages?: Language[]
     getLanguage?(languageId: string): Language | undefined;
 }
 
+/**
+ * @deprecated since 1.4.0 - in order to remove monaco-languageclient, use VS Code extensions to contribute language smartness:
+ * https://code.visualstudio.com/api/language-extensions/language-server-extension-guide
+ */
 export const Workspace = Symbol('Workspace');
 export interface Workspace extends services.Workspace {
     readonly ready: Promise<void>;

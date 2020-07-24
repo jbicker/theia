@@ -13,9 +13,10 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
+
 import { injectable, inject, multiInject, postConstruct, optional } from 'inversify';
 import { ILogger, ConnectionErrorHandler } from '@theia/core/lib/common';
-import { HostedPluginClient, PluginModel, ServerPluginRunner } from '../../common/plugin-protocol';
+import { HostedPluginClient, PluginModel, ServerPluginRunner, DeployedPlugin } from '../../common/plugin-protocol';
 import { LogPart } from '../../common/types';
 import { HostedPluginProcess } from './hosted-plugin-process';
 
@@ -62,16 +63,18 @@ export class HostedPluginSupport {
         this.isPluginProcessRunning = false;
         this.terminatePluginServer();
         this.isPluginProcessRunning = false;
+        this.pluginRunners.forEach(runner => runner.clientClosed());
     }
 
     runPlugin(plugin: PluginModel): void {
-        if (plugin.entryPoint.backend) {
+        if (!plugin.entryPoint.frontend) {
             this.runPluginServer();
         }
     }
 
     onMessage(message: string): void {
         // need to perform routing
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const jsonMessage: any = JSON.parse(message);
         if (this.pluginRunners.length > 0) {
             this.pluginRunners.forEach(runner => {
@@ -93,6 +96,20 @@ export class HostedPluginSupport {
             this.hostedPluginProcess.runPluginServer();
             this.isPluginProcessRunning = true;
         }
+    }
+
+    /**
+     * Provides additional plugin ids.
+     */
+    public async getExtraDeployedPluginIds(): Promise<string[]> {
+        return [].concat.apply([], await Promise.all(this.pluginRunners.map(runner => runner.getExtraDeployedPluginIds())));
+    }
+
+    /**
+     * Provides additional deployed plugins.
+     */
+    public async getExtraDeployedPlugins(): Promise<DeployedPlugin[]> {
+        return [].concat.apply([], await Promise.all(this.pluginRunners.map(runner => runner.getExtraDeployedPlugins())));
     }
 
     public sendLog(logPart: LogPart): void {

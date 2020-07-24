@@ -14,14 +14,13 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import URI from 'vscode-uri/lib/umd';
+import { URI } from 'vscode-uri';
 import * as theia from '@theia/plugin';
 import { DocumentsExtImpl } from '../documents';
-import * as types from '../types-impl';
-import { ReferenceContext, Location } from '../../api/model';
+import { ReferenceContext, Location } from '../../common/plugin-api-rpc-model';
 import * as Converter from '../type-converters';
-import { Position } from '../../api/plugin-api';
-import { createToken } from '../token-provider';
+import { Position } from '../../common/plugin-api-rpc';
+import { isLocationArray } from './util';
 
 export class ReferenceAdapter {
 
@@ -30,7 +29,7 @@ export class ReferenceAdapter {
         private readonly documents: DocumentsExtImpl
     ) { }
 
-    provideReferences(resource: URI, position: Position, context: ReferenceContext): Promise<Location[] | undefined> {
+    provideReferences(resource: URI, position: Position, context: ReferenceContext, token: theia.CancellationToken): Promise<Location[] | undefined> {
         const documentData = this.documents.getDocumentData(resource);
         if (!documentData) {
             return Promise.reject(new Error(`There is no document for ${resource}`));
@@ -39,15 +38,15 @@ export class ReferenceAdapter {
         const document = documentData.document;
         const zeroBasedPosition = Converter.toPosition(position);
 
-        return Promise.resolve(this.provider.provideReferences(document, zeroBasedPosition, context, createToken())).then(referencce => {
-            if (!referencce) {
+        return Promise.resolve(this.provider.provideReferences(document, zeroBasedPosition, context, token)).then(reference => {
+            if (!reference) {
                 return undefined;
             }
 
-            if (this.isLocationArray(referencce)) {
+            if (isLocationArray(reference)) {
                 const locations: Location[] = [];
 
-                for (const location of referencce) {
+                for (const location of reference) {
                     locations.push(Converter.fromLocation(location));
                 }
 
@@ -56,8 +55,4 @@ export class ReferenceAdapter {
         });
     }
 
-    /* tslint:disable-next-line:no-any */
-    private isLocationArray(array: any): array is types.Location[] {
-        return Array.isArray(array) && array.length > 0 && array[0] instanceof types.Location;
-    }
 }

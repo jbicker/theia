@@ -19,16 +19,19 @@ import { FrontendApplication, AbstractViewContribution } from '@theia/core/lib/b
 import { WidgetManager } from '@theia/core/lib/browser/widget-manager';
 import { injectable, inject } from 'inversify';
 import { GitDiffWidget, GIT_DIFF } from './git-diff-widget';
+import { ScmService } from '@theia/scm/lib/browser/scm-service';
 import { open, OpenerService } from '@theia/core/lib/browser';
-import { NAVIGATOR_CONTEXT_MENU } from '@theia/navigator/lib/browser/navigator-contribution';
-import { UriCommandHandler, UriAwareCommandHandler } from '@theia/core/lib/common/uri-command-handler';
+import { NavigatorContextMenu, FileNavigatorContribution } from '@theia/navigator/lib/browser/navigator-contribution';
+import { UriCommandHandler } from '@theia/core/lib/common/uri-command-handler';
 import { GitQuickOpenService } from '../git-quick-open-service';
 import { FileSystem } from '@theia/filesystem/lib/common';
 import { DiffUris } from '@theia/core/lib/browser/diff-uris';
 import URI from '@theia/core/lib/common/uri';
 import { GIT_RESOURCE_SCHEME } from '../git-resource';
-import { Git } from '../../common';
-import { GitRepositoryProvider } from '../git-repository-provider';
+import { Git, Repository } from '../../common';
+import { WorkspaceRootUriAwareCommandHandler } from '@theia/workspace/lib/browser/workspace-commands';
+import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { TabBarToolbarContribution, TabBarToolbarRegistry } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 
 export namespace GitDiffCommands {
     export const OPEN_FILE_DIFF: Command = {
@@ -38,8 +41,21 @@ export namespace GitDiffCommands {
     };
 }
 
+export namespace ScmNavigatorMoreToolbarGroups {
+    export const SCM = '3_navigator_scm';
+}
+
 @injectable()
-export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget> {
+export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget> implements TabBarToolbarContribution {
+
+    @inject(CommandRegistry)
+    protected readonly commandRegistry: CommandRegistry;
+
+    @inject(FileNavigatorContribution)
+    protected readonly fileNavigatorContribution: FileNavigatorContribution;
+
+    @inject(WorkspaceService)
+    protected readonly workspaceService: WorkspaceService;
 
     constructor(
         @inject(SelectionService) protected readonly selectionService: SelectionService,
@@ -49,26 +65,28 @@ export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget>
         @inject(FileSystem) protected readonly fileSystem: FileSystem,
         @inject(OpenerService) protected openerService: OpenerService,
         @inject(MessageService) protected readonly notifications: MessageService,
-        @inject(GitRepositoryProvider) protected readonly repositoryProvider: GitRepositoryProvider
+        @inject(ScmService) protected readonly scmService: ScmService
     ) {
         super({
             widgetId: GIT_DIFF,
             widgetName: 'Git diff',
             defaultWidgetOptions: {
                 area: 'left',
-                rank: 400
+                rank: 500
             }
         });
     }
 
     registerMenus(menus: MenuModelRegistry): void {
-        menus.registerMenuAction([...NAVIGATOR_CONTEXT_MENU, '5_diff'], {
+        menus.registerMenuAction(NavigatorContextMenu.COMPARE, {
             commandId: GitDiffCommands.OPEN_FILE_DIFF.id
         });
     }
 
     registerCommands(commands: CommandRegistry): void {
-        commands.registerCommand(GitDiffCommands.OPEN_FILE_DIFF, this.newUriAwareCommandHandler({
+        commands.registerCommand(GitDiffCommands.OPEN_FILE_DIFF, this.newWorkspaceRootUriAwareCommandHandler({
+            isVisible: uri => !!this.findGitRepository(uri),
+            isEnabled: uri => !!this.findGitRepository(uri),
             execute: async fileUri => {
                 await this.quickOpenService.chooseTagsAndBranches(
                     async (fromRevision, toRevision) => {
@@ -86,7 +104,7 @@ export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget>
                             } else {
                                 const fromURI = fileUri.withScheme(GIT_RESOURCE_SCHEME).withQuery(fromRevision);
                                 const toURI = fileUri;
-                                const diffUri = DiffUris.encode(fromURI, toURI, fileUri.displayName);
+                                const diffUri = DiffUris.encode(fromURI, toURI);
                                 if (diffUri) {
                                     open(this.openerService, diffUri).catch(e => {
                                         this.notifications.error(e.message);
@@ -94,9 +112,26 @@ export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget>
                                 }
                             }
                         }
-                    }, this.repositoryProvider.findRepository(fileUri));
+                    }, this.findGitRepository(fileUri));
             }
         }));
+    }
+
+    registerToolbarItems(registry: TabBarToolbarRegistry): void {
+        this.fileNavigatorContribution.registerMoreToolbarItem({
+            id: GitDiffCommands.OPEN_FILE_DIFF.id,
+            command: GitDiffCommands.OPEN_FILE_DIFF.id,
+            tooltip: GitDiffCommands.OPEN_FILE_DIFF.label,
+            group: ScmNavigatorMoreToolbarGroups.SCM,
+        });
+    }
+
+    protected findGitRepository(uri: URI): Repository | undefined {
+        const repo = this.scmService.findRepository(uri);
+        if (repo && repo.provider.id === 'git') {
+            return { localUri: repo.provider.rootUri };
+        }
+        return undefined;
     }
 
     async showWidget(options: Git.Options.Diff): Promise<GitDiffWidget> {
@@ -107,8 +142,7 @@ export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget>
         });
     }
 
-    protected newUriAwareCommandHandler(handler: UriCommandHandler<URI>): UriAwareCommandHandler<URI> {
-        return new UriAwareCommandHandler(this.selectionService, handler);
+    protected newWorkspaceRootUriAwareCommandHandler(handler: UriCommandHandler<URI>): WorkspaceRootUriAwareCommandHandler {
+        return new WorkspaceRootUriAwareCommandHandler(this.workspaceService, this.selectionService, handler);
     }
-
 }

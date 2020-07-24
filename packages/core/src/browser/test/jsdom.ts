@@ -24,8 +24,8 @@ import { JSDOM } from 'jsdom';
  * ```
  */
 export function enableJSDOM(): () => void {
-    // tslint:disable:no-any
-    // tslint:disable:no-unused-expression
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    /* eslint-disable no-unused-expressions */
 
     // do nothing if running in browser
     try {
@@ -51,7 +51,7 @@ export function enableJSDOM(): () => void {
             toCleanup.push(property);
         }
     });
-    (dom.window.document as any)['queryCommandSupported'] = function () { };
+    (dom.window.document as any)['queryCommandSupported'] = function (): void { };
 
     const disableJSDOM = (global as any)['_disableJSDOM'] = () => {
         let property: string | undefined;

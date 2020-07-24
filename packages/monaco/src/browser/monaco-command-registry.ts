@@ -16,39 +16,34 @@
 
 import { injectable, inject } from 'inversify';
 import { Command, CommandHandler, CommandRegistry, SelectionService } from '@theia/core';
-import { EditorManager, TextEditorSelection } from '@theia/editor/lib/browser';
+import { TextEditorSelection } from '@theia/editor/lib/browser';
 import { MonacoEditor } from './monaco-editor';
+import { MonacoEditorProvider } from './monaco-editor-provider';
 
 export interface MonacoEditorCommandHandler {
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     execute(editor: MonacoEditor, ...args: any[]): any;
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     isEnabled?(editor: MonacoEditor, ...args: any[]): boolean;
 }
 @injectable()
 export class MonacoCommandRegistry {
 
-    public static MONACO_COMMAND_PREFIX = 'monaco.';
+    @inject(MonacoEditorProvider)
+    protected readonly monacoEditors: MonacoEditorProvider;
 
-    constructor(
-        @inject(CommandRegistry) protected readonly commands: CommandRegistry,
-        @inject(EditorManager) protected readonly editorManager: EditorManager,
-        @inject(SelectionService) protected readonly selectionService: SelectionService
-    ) { }
+    @inject(CommandRegistry) protected readonly commands: CommandRegistry;
 
-    protected prefix(command: string): string {
-        return MonacoCommandRegistry.MONACO_COMMAND_PREFIX + command;
-    }
+    @inject(SelectionService) protected readonly selectionService: SelectionService;
 
     validate(command: string): string | undefined {
-        const monacoCommand = this.prefix(command);
-        return this.commands.commandIds.indexOf(monacoCommand) !== -1 ? monacoCommand : undefined;
+        return this.commands.commandIds.indexOf(command) !== -1 ? command : undefined;
     }
 
     registerCommand(command: Command, handler: MonacoEditorCommandHandler): void {
         this.commands.registerCommand({
             ...command,
-            id: this.prefix(command.id)
+            id: command.id
         }, this.newHandler(handler));
     }
 
@@ -64,23 +59,22 @@ export class MonacoCommandRegistry {
         };
     }
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     protected execute(monacoHandler: MonacoEditorCommandHandler, ...args: any[]): any {
-        const editor = MonacoEditor.getCurrent(this.editorManager);
+        const editor = this.monacoEditors.current;
         if (editor) {
-            editor.focus();
             return Promise.resolve(monacoHandler.execute(editor, ...args));
         }
         return Promise.resolve();
     }
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     protected isEnabled(monacoHandler: MonacoEditorCommandHandler, ...args: any[]): boolean {
-        const editor = MonacoEditor.getCurrent(this.editorManager);
+        const editor = this.monacoEditors.current;
         return !!editor && (!monacoHandler.isEnabled || monacoHandler.isEnabled(editor, ...args));
     }
 
-    // tslint:disable-next-line:no-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     protected isVisible(monacoHandler: MonacoEditorCommandHandler, ...args: any[]): boolean {
         return TextEditorSelection.is(this.selectionService.selection);
     }

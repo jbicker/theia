@@ -14,7 +14,7 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { inject, injectable } from 'inversify';
+import { inject, injectable, postConstruct } from 'inversify';
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-types';
 import URI from '@theia/core/lib/common/uri';
 import { notEmpty } from '@theia/core/lib/common/objects';
@@ -25,9 +25,15 @@ import { TreeDecorator, TreeDecoration } from '@theia/core/lib/browser/tree/tree
 import { FileStatNode } from '@theia/filesystem/lib/browser';
 import { Marker } from '../../common/marker';
 import { ProblemManager } from './problem-manager';
+import { ProblemPreferences, ProblemConfiguration } from './problem-preferences';
+import { PreferenceChangeEvent } from '@theia/core/lib/browser';
+import { ProblemUtils } from './problem-utils';
 
 @injectable()
 export class ProblemDecorator implements TreeDecorator {
+
+    @inject(ProblemPreferences)
+    protected problemPreferences: ProblemPreferences;
 
     readonly id = 'theia-problem-decorator';
 
@@ -36,6 +42,16 @@ export class ProblemDecorator implements TreeDecorator {
     constructor(@inject(ProblemManager) protected readonly problemManager: ProblemManager) {
         this.emitter = new Emitter();
         this.problemManager.onDidChangeMarkers(() => this.fireDidChangeDecorations((tree: Tree) => this.collectDecorators(tree)));
+    }
+
+    @postConstruct()
+    protected init(): void {
+        this.problemPreferences.onPreferenceChanged((event: PreferenceChangeEvent<ProblemConfiguration>) => {
+            const { preferenceName } = event;
+            if (preferenceName === 'problems.decorations.enabled') {
+                this.fireDidChangeDecorations((tree: Tree) => this.collectDecorators(tree));
+            }
+        });
     }
 
     async decorations(tree: Tree): Promise<Map<string, TreeDecoration.Data>> {
@@ -51,8 +67,11 @@ export class ProblemDecorator implements TreeDecorator {
     }
 
     protected collectDecorators(tree: Tree): Map<string, TreeDecoration.Data> {
+
         const result = new Map();
-        if (tree.root === undefined) {
+
+        // If the tree root is undefined or the preference for the decorations is disabled, return an empty result map.
+        if (tree.root === undefined || !this.problemPreferences['problems.decorations.enabled']) {
             return result;
         }
         const markers = this.appendContainerMarkers(tree, this.collectMarkers(tree));
@@ -111,16 +130,21 @@ export class ProblemDecorator implements TreeDecorator {
         const position = TreeDecoration.IconOverlayPosition.BOTTOM_RIGHT;
         const icon = this.getOverlayIcon(marker);
         const color = this.getOverlayIconColor(marker);
+        const priority = this.getPriority(marker);
         return {
+            priority,
+            fontData: {
+                color,
+            },
             iconOverlay: {
                 position,
                 icon,
                 color,
                 background: {
                     shape: 'circle',
-                    color: 'var(--theia-layout-color0)'
+                    color: 'transparent'
                 }
-            }
+            },
         };
     }
 
@@ -137,10 +161,25 @@ export class ProblemDecorator implements TreeDecorator {
     protected getOverlayIconColor(marker: Marker<Diagnostic>): TreeDecoration.Color {
         const { severity } = marker.data;
         switch (severity) {
-            case 1: return 'var(--theia-error-color0)';
-            case 2: return 'var(--theia-warn-color0)';
-            case 3: return 'var(--theia-info-color0)';
-            default: return 'var(--theia-success-color0)';
+            case 1: return 'var(--theia-editorError-foreground)';
+            case 2: return 'var(--theia-editorWarning-foreground)';
+            case 3: return 'var(--theia-editorInfo-foreground)';
+            default: return 'var(--theia-successBackground)';
+        }
+    }
+
+    /**
+     * Get the decoration for a given marker diagnostic.
+     * Markers with higher severity have a higher priority and should be displayed.
+     * @param marker the diagnostic marker.
+     */
+    protected getPriority(marker: Marker<Diagnostic>): number {
+        const { severity } = marker.data;
+        switch (severity) {
+            case 1: return 30; // Errors.
+            case 2: return 20; // Warnings.
+            case 3: return 10; // Infos.
+            default: return 0;
         }
     }
 
@@ -164,7 +203,6 @@ export class ProblemDecorator implements TreeDecorator {
 export namespace ProblemDecorator {
 
     // Highest severities (errors) come first, then the others. Undefined severities treated as the last ones.
-    export const severityCompare = (left: Marker<Diagnostic>, right: Marker<Diagnostic>): number =>
-        (left.data.severity || Number.MAX_SAFE_INTEGER) - (right.data.severity || Number.MAX_SAFE_INTEGER);
+    export const severityCompare = ProblemUtils.severityCompare;
 
 }

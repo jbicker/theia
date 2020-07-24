@@ -14,8 +14,9 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { TextDocumentContentChangeEvent } from 'vscode-languageserver-types';
+import { TextDocumentContentChangeEvent } from 'vscode-languageserver-protocol';
 import { JsonRpcServer, ApplicationError } from '@theia/core/lib/common';
+import { injectable } from 'inversify';
 export const fileSystemPath = '/services/filesystem';
 
 export const FileSystem = Symbol('FileSystem');
@@ -48,8 +49,17 @@ export interface FileSystem extends JsonRpcServer<FileSystemClient> {
 
     /**
      * Updates the content replacing its previous value.
+     *
+     * The optional parameter `overwriteEncoding` can be used to transform the encoding of a file.
+     *
+     * |   | encoding | overwriteEncoding | behaviour |
+     * |---|----------|-------------------|-----------|
+     * | 1 | undefined |    undefined     | read & write file in default encoding |
+     * | 2 | undefined |        ✓         | read file in default encoding; write file in `overwriteEncoding` |
+     * | 3 |     ✓    |     undefined     | read & write file in `encoding` |
+     * | 4 |     ✓    |        ✓         | read file in `encoding`; write file in `overwriteEncoding` |
      */
-    updateContent(file: FileStat, contentChanges: TextDocumentContentChangeEvent[], options?: { encoding?: string }): Promise<FileStat>;
+    updateContent(file: FileStat, contentChanges: TextDocumentContentChangeEvent[], options?: { encoding?: string, overwriteEncoding?: string }): Promise<FileStat>;
 
     /**
      * Moves the file to a new path identified by the resource.
@@ -105,6 +115,11 @@ export interface FileSystem extends JsonRpcServer<FileSystemClient> {
     getEncoding(uri: string): Promise<string>;
 
     /**
+     * Guess encoding of a given file based on its content.
+     */
+    guessEncoding(uri: string): Promise<string | undefined>;
+
+    /**
      * Return list of available roots.
      */
     getRoots(): Promise<FileStat[]>;
@@ -128,6 +143,15 @@ export interface FileSystem extends JsonRpcServer<FileSystemClient> {
      */
     access(uri: string, mode?: number): Promise<boolean>
 
+    /**
+     * Returns the path of the given file URI, specific to the backend's operating system.
+     * If the URI is not a file URI, undefined is returned.
+     *
+     * USE WITH CAUTION: You should always prefer URIs to paths if possible, as they are
+     * portable and platform independent. Paths should only be used in cases you directly
+     * interact with the OS, e.g. when running a command on the shell.
+     */
+    getFsPath(uri: string): Promise<string | undefined>
 }
 
 export namespace FileAccess {
@@ -188,7 +212,54 @@ export interface FileSystemClient {
      */
     shouldOverwrite: FileShouldOverwrite;
 
-    onDidMove(sourceUri: string, targetUri: string): void;
+    willCreate(uri: string): Promise<void>;
+
+    didCreate(uri: string, failed: boolean): Promise<void>;
+
+    willDelete(uri: string): Promise<void>;
+
+    didDelete(uri: string, failed: boolean): Promise<void>;
+
+    willMove(sourceUri: string, targetUri: string): Promise<void>;
+
+    didMove(sourceUri: string, targetUri: string, failed: boolean): Promise<void>;
+
+}
+
+@injectable()
+export class DispatchingFileSystemClient implements FileSystemClient {
+
+    readonly clients = new Set<FileSystemClient>();
+
+    shouldOverwrite(originalStat: FileStat, currentStat: FileStat): Promise<boolean> {
+        return Promise.race(Array.from(this.clients, client =>
+            client.shouldOverwrite(originalStat, currentStat))
+        );
+    }
+
+    async willCreate(uri: string): Promise<void> {
+        await Promise.all(Array.from(this.clients, client => client.willCreate(uri)));
+    }
+
+    async didCreate(uri: string, failed: boolean): Promise<void> {
+        await Promise.all(Array.from(this.clients, client => client.didCreate(uri, failed)));
+    }
+
+    async willDelete(uri: string): Promise<void> {
+        await Promise.all(Array.from(this.clients, client => client.willDelete(uri)));
+    }
+
+    async didDelete(uri: string, failed: boolean): Promise<void> {
+        await Promise.all(Array.from(this.clients, client => client.didDelete(uri, failed)));
+    }
+
+    async willMove(sourceUri: string, targetUri: string): Promise<void> {
+        await Promise.all(Array.from(this.clients, client => client.willMove(sourceUri, targetUri)));
+    }
+
+    async didMove(sourceUri: string, targetUri: string, failed: boolean): Promise<void> {
+        await Promise.all(Array.from(this.clients, client => client.didMove(sourceUri, targetUri, failed)));
+    }
 
 }
 
@@ -226,10 +297,8 @@ export interface FileStat {
 }
 
 export namespace FileStat {
-    export function is(candidate: object): candidate is FileStat {
-        return candidate.hasOwnProperty('uri')
-            && candidate.hasOwnProperty('lastModification')
-            && candidate.hasOwnProperty('isDirectory');
+    export function is(candidate: Object | undefined): candidate is FileStat {
+        return typeof candidate === 'object' && ('uri' in candidate) && ('lastModification' in candidate) && ('isDirectory' in candidate);
     }
 
     export function equals(one: object | undefined, other: object | undefined): boolean {

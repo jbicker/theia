@@ -19,7 +19,7 @@ import { SplitPanel, SplitLayout, Widget } from '@phosphor/widgets';
 
 export interface SplitPositionOptions {
     /** The side of the side panel that shall be resized. */
-    side: 'left' | 'right' | 'top' | 'bottom';
+    side?: 'left' | 'right' | 'top' | 'bottom';
     /** The duration in milliseconds, or 0 for no animation. */
     duration: number;
     /** When this widget is hidden, the animation is canceled. */
@@ -31,7 +31,7 @@ export interface MoveEntry extends SplitPositionOptions {
     index: number;
     started: boolean;
     ended: boolean;
-    targetSize: number;
+    targetSize?: number;
     targetPosition?: number;
     startPosition?: number;
     startTime?: number
@@ -46,17 +46,32 @@ export class SplitPositionHandler {
     private currentMoveIndex: number = 0;
 
     /**
+     * Set the position of a split handle asynchronously. This function makes sure that such movements
+     * are performed one after another in order to prevent the movements from overriding each other.
+     * When resolved, the returned promise yields the final position of the split handle.
+     */
+    setSplitHandlePosition(parent: SplitPanel, index: number, targetPosition: number, options: SplitPositionOptions): Promise<number> {
+        const move: MoveEntry = {
+            ...options,
+            parent, targetPosition, index,
+            started: false,
+            ended: false
+        };
+        return this.moveSplitPos(move);
+    }
+
+    /**
      * Resize a side panel asynchronously. This function makes sure that such movements are performed
      * one after another in order to prevent the movements from overriding each other.
      * When resolved, the returned promise yields the final position of the split handle.
      */
     setSidePanelSize(sidePanel: Widget, targetSize: number, options: SplitPositionOptions): Promise<number> {
         if (targetSize < 0) {
-            return Promise.reject('Cannot resize to negative value.');
+            return Promise.reject(new Error('Cannot resize to negative value.'));
         }
         const parent = sidePanel.parent;
         if (!(parent instanceof SplitPanel)) {
-            return Promise.reject('Widget must be contained in a SplitPanel.');
+            return Promise.reject(new Error('Widget must be contained in a SplitPanel.'));
         }
         let index = parent.widgets.indexOf(sidePanel);
         if (index > 0 && (options.side === 'right' || options.side === 'bottom')) {
@@ -123,7 +138,7 @@ export class SplitPositionHandler {
     }
 
     protected startMove(move: MoveEntry, time: number): void {
-        if (move.targetPosition === undefined) {
+        if (move.targetPosition === undefined && move.targetSize !== undefined) {
             const { clientWidth, clientHeight } = move.parent.node;
             if (clientWidth && clientHeight) {
                 switch (move.side) {
@@ -164,6 +179,7 @@ export class SplitPositionHandler {
         } else {
             pos = layout.handles[move.index].offsetTop;
         }
+        // eslint-disable-next-line no-null/no-null
         if (pos !== null) {
             return pos;
         } else {

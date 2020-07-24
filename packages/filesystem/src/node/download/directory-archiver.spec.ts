@@ -21,8 +21,9 @@ import { extract } from 'tar-fs';
 import { expect } from 'chai';
 import URI from '@theia/core/lib/common/uri';
 import { MockDirectoryArchiver } from './test/mock-directory-archiver';
+import { FileUri } from '@theia/core/lib/node/file-uri';
 
-// tslint:disable:no-unused-expression
+/* eslint-disable no-unused-expressions */
 
 const track = temp.track();
 
@@ -32,7 +33,7 @@ describe('directory-archiver', () => {
         track.cleanupSync();
     });
 
-    it('should archive a directory', async function () {
+    it('should archive a directory', async function (): Promise<unknown> {
         this.timeout(20_000);
         const fromPath = track.mkdirSync('from');
         fs.writeFileSync(path.join(fromPath, 'A.txt'), 'A');
@@ -84,18 +85,18 @@ describe('directory-archiver', () => {
         ] as ({ input: string[], expected: Map<string, string[]>, folders?: string[] })[]).forEach(test => {
             const { input, expected, folders } = test;
             it(`should find the common parent URIs among [${input.join(', ')}] => [${Array.from(expected.keys()).join(', ')}]`, async () => {
-                const archiver = new MockDirectoryArchiver(!!folders ? folders.map(u => new URI(u)) : []);
-                const actual = await archiver.findCommonParents(input.map(u => new URI(u)));
+                const archiver = new MockDirectoryArchiver(folders ? folders.map(FileUri.create) : []);
+                const actual = await archiver.findCommonParents(input.map(FileUri.create));
                 expect(asString(actual)).to.be.equal(asString(expected));
             });
         });
 
         function asString(map: Map<string, string[]>): string {
-            // tslint:disable-next-line:no-any
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const obj: any = {};
             for (const key of Array.from(map.keys()).sort()) {
                 const values = (map.get(key) || []).sort();
-                obj[key] = `[${values.join(', ')}]`;
+                obj[new URI(key).withScheme('file').toString()] = `[${values.map(v => new URI(v).withScheme('file').toString()).join(', ')}]`;
             }
             return JSON.stringify(obj);
         }

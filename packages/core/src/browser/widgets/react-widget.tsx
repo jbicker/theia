@@ -16,19 +16,21 @@
 
 import * as ReactDOM from 'react-dom';
 import * as React from 'react';
-import { injectable } from 'inversify';
+import { injectable, unmanaged } from 'inversify';
 import { DisposableCollection, Disposable } from '../../common';
 import { BaseWidget, Message } from './widget';
+import { Widget } from '@phosphor/widgets';
 
 @injectable()
 export abstract class ReactWidget extends BaseWidget {
 
     protected readonly onRender = new DisposableCollection();
 
-    constructor() {
-        super();
+    constructor(@unmanaged() options?: Widget.IOptions) {
+        super(options);
         this.scrollOptions = {
-            suppressScrollX: true
+            suppressScrollX: true,
+            minScrollbarLength: 35,
         };
         this.toDispose.push(Disposable.create(() => {
             ReactDOM.unmountComponentAtNode(this.node);
@@ -40,5 +42,11 @@ export abstract class ReactWidget extends BaseWidget {
         ReactDOM.render(<React.Fragment>{this.render()}</React.Fragment>, this.node, () => this.onRender.dispose());
     }
 
+    /**
+     * Render the React widget in the DOM.
+     * - If the widget has been previously rendered,
+     * any subsequent calls will perform an update and only
+     * change the DOM if absolutely necessary.
+     */
     protected abstract render(): React.ReactNode;
 }

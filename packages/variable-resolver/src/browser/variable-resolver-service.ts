@@ -14,10 +14,20 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-// tslint:disable:no-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { injectable, inject } from 'inversify';
 import { VariableRegistry } from './variable';
+import URI from '@theia/core/lib/common/uri';
+import { JSONExt, ReadonlyJSONValue } from '@phosphor/coreutils/lib/json';
+
+export interface VariableResolveOptions {
+    context?: URI;
+    /**
+     * Used for resolving inputs, see https://code.visualstudio.com/docs/editor/variables-reference#_input-variables
+     */
+    configurationSection?: string;
+}
 
 /**
  * The variable resolver service should be used to resolve variables in strings.
@@ -31,25 +41,30 @@ export class VariableResolverService {
 
     /**
      * Resolve the variables in the given string array.
+     * @param value The array of data to resolve
+     * @param options options of the variable resolution
      * @returns promise resolved to the provided string array with already resolved variables.
      * Never reject.
      */
-    resolveArray(value: string[]): Promise<string[]> {
-        return this.resolve(value);
+    resolveArray(value: string[], options: VariableResolveOptions = {}): Promise<string[]> {
+        return this.resolve(value, options);
     }
 
     /**
      * Resolve the variables in the given string.
+     * @param value Data to resolve
+     * @param options options of the variable resolution
      * @returns promise resolved to the provided string with already resolved variables.
      * Never reject.
      */
-    async resolve<T>(value: T): Promise<T> {
-        const context = new VariableResolverService.Context(this.variableRegistry);
+    async resolve<T>(value: T, options: VariableResolveOptions = {}): Promise<T> {
+        const context = new VariableResolverService.Context(this.variableRegistry, options);
         const resolved = await this.doResolve(value, context);
         return resolved as any;
     }
 
     protected async doResolve(value: Object | undefined, context: VariableResolverService.Context): Promise<Object | undefined> {
+        // eslint-disable-next-line no-null/no-null
         if (value === undefined || value === null) {
             return value;
         }
@@ -95,13 +110,14 @@ export class VariableResolverService {
     }
 
     protected async resolveVariables(value: string, context: VariableResolverService.Context): Promise<void> {
+        const variableRegExp = new RegExp(VariableResolverService.VAR_REGEXP);
         let match;
-        while ((match = VariableResolverService.VAR_REGEXP.exec(value)) !== null) {
+        // eslint-disable-next-line no-null/no-null
+        while ((match = variableRegExp.exec(value)) !== null) {
             const variableName = match[1];
             await context.resolve(variableName);
         }
     }
-
 }
 export namespace VariableResolverService {
     export class Context {
@@ -109,7 +125,8 @@ export namespace VariableResolverService {
         protected readonly resolved = new Map<string, string | undefined>();
 
         constructor(
-            protected readonly variableRegistry: VariableRegistry
+            protected readonly variableRegistry: VariableRegistry,
+            protected readonly options: VariableResolveOptions
         ) { }
 
         get(name: string): string | undefined {
@@ -121,9 +138,18 @@ export namespace VariableResolverService {
                 return;
             }
             try {
-                const variable = this.variableRegistry.getVariable(name);
-                const value = variable && await variable.resolve();
-                this.resolved.set(name, value);
+                let variableName = name;
+                let argument: string | undefined;
+                const parts = name.split(':');
+                if (parts.length > 1) {
+                    variableName = parts[0];
+                    argument = parts[1];
+                }
+                const variable = this.variableRegistry.getVariable(variableName);
+                const value = variable && await variable.resolve(this.options.context, argument, this.options.configurationSection);
+                // eslint-disable-next-line no-null/no-null
+                const stringValue = value !== undefined && value !== null && JSONExt.isPrimitive(value as ReadonlyJSONValue) ? String(value) : undefined;
+                this.resolved.set(name, stringValue);
             } catch (e) {
                 console.error(`Failed to resolved '${name}' variable`, e);
                 this.resolved.set(name, undefined);

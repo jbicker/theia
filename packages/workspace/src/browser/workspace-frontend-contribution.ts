@@ -14,17 +14,39 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { injectable, inject } from 'inversify';
-import { CommandContribution, CommandRegistry, MenuContribution, MenuModelRegistry } from '@theia/core/lib/common';
+import { injectable, inject, postConstruct } from 'inversify';
+import { CommandContribution, CommandRegistry, MenuContribution, MenuModelRegistry, SelectionService } from '@theia/core/lib/common';
 import { isOSX, environment, OS } from '@theia/core';
-import { open, OpenerService, CommonMenus, StorageService, LabelProvider, ConfirmDialog, KeybindingRegistry, KeybindingContribution } from '@theia/core/lib/browser';
+import {
+    open, OpenerService, CommonMenus, StorageService, LabelProvider,
+    ConfirmDialog, KeybindingRegistry, KeybindingContribution, CommonCommands
+} from '@theia/core/lib/browser';
 import { FileDialogService, OpenFileDialogProps, FileDialogTreeFilters } from '@theia/filesystem/lib/browser';
 import { FileSystem } from '@theia/filesystem/lib/common';
-import { WorkspaceService, THEIA_EXT, VSCODE_EXT } from './workspace-service';
+import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
+import { WorkspaceService } from './workspace-service';
+import { THEIA_EXT, VSCODE_EXT } from '../common';
 import { WorkspaceCommands } from './workspace-commands';
 import { QuickOpenWorkspace } from './quick-open-workspace';
 import { WorkspacePreferences } from './workspace-preferences';
 import URI from '@theia/core/lib/common/uri';
+import { UriAwareCommandHandler } from '@theia/core/lib/common/uri-command-handler';
+
+export enum WorkspaceStates {
+    /**
+     * The state is `empty` when no workspace is opened.
+     */
+    empty = 'empty',
+    /**
+     * The state is `workspace` when a workspace is opened.
+     */
+    workspace = 'workspace',
+    /**
+     * The state is `folder` when a folder is opened. (1 folder)
+     */
+    folder = 'folder',
+};
+export type WorkspaceState = keyof typeof WorkspaceStates;
 
 @injectable()
 export class WorkspaceFrontendContribution implements CommandContribution, KeybindingContribution, MenuContribution {
@@ -37,6 +59,42 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
     @inject(QuickOpenWorkspace) protected readonly quickOpenWorkspace: QuickOpenWorkspace;
     @inject(FileDialogService) protected readonly fileDialogService: FileDialogService;
     @inject(WorkspacePreferences) protected preferences: WorkspacePreferences;
+    @inject(SelectionService) protected readonly selectionService: SelectionService;
+    @inject(CommandRegistry) protected readonly commandRegistry: CommandRegistry;
+
+    @inject(ContextKeyService)
+    protected readonly contextKeyService: ContextKeyService;
+
+    @postConstruct()
+    protected init(): void {
+        this.initWorkspaceContextKeys();
+    }
+
+    protected initWorkspaceContextKeys(): void {
+        const workspaceFolderCountKey = this.contextKeyService.createKey<number>('workspaceFolderCount', 0);
+        const updateWorkspaceFolderCountKey = () => workspaceFolderCountKey.set(this.workspaceService.tryGetRoots().length);
+        updateWorkspaceFolderCountKey();
+
+        const workspaceStateKey = this.contextKeyService.createKey<WorkspaceState>('workspaceState', 'empty');
+        const updateWorkspaceStateKey = () => workspaceStateKey.set(this.updateWorkspaceStateKey());
+        updateWorkspaceStateKey();
+
+        this.updateStyles();
+        this.workspaceService.onWorkspaceChanged(() => {
+            updateWorkspaceFolderCountKey();
+            updateWorkspaceStateKey();
+            this.updateStyles();
+        });
+    }
+
+    protected updateStyles(): void {
+        document.body.classList.remove('theia-no-open-workspace');
+        // Display the 'no workspace opened' theme color when no folders are opened (single-root).
+        if (!this.workspaceService.isMultiRootWorkspaceOpened &&
+            !this.workspaceService.tryGetRoots().length) {
+            document.body.classList.add('theia-no-open-workspace');
+        }
+    }
 
     registerCommands(commands: CommandRegistry): void {
         // Not visible/enabled on Windows/Linux in electron.
@@ -67,9 +125,13 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
             execute: () => this.quickOpenWorkspace.select()
         });
         commands.registerCommand(WorkspaceCommands.SAVE_WORKSPACE_AS, {
-            isEnabled: () => this.workspaceService.isMultiRootWorkspaceOpened,
+            isEnabled: () => this.workspaceService.isMultiRootWorkspaceEnabled,
             execute: () => this.saveWorkspaceAs()
         });
+        commands.registerCommand(WorkspaceCommands.SAVE_AS,
+            new UriAwareCommandHandler(this.selectionService, {
+                execute: (uri: URI) => this.saveAs(uri),
+            }));
     }
 
     registerMenus(menus: MenuModelRegistry): void {
@@ -107,12 +169,20 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
         menus.registerMenuAction(CommonMenus.FILE_CLOSE, {
             commandId: WorkspaceCommands.CLOSE.id
         });
+
+        menus.registerMenuAction(CommonMenus.FILE_SAVE, {
+            commandId: WorkspaceCommands.SAVE_AS.id,
+        });
     }
 
     registerKeybindings(keybindings: KeybindingRegistry): void {
         keybindings.registerKeybinding({
+            command: WorkspaceCommands.NEW_FILE.id,
+            keybinding: this.isElectron() ? 'ctrlcmd+n' : 'alt+n',
+        });
+        keybindings.registerKeybinding({
             command: isOSX || !this.isElectron() ? WorkspaceCommands.OPEN.id : WorkspaceCommands.OPEN_FILE.id,
-            keybinding: 'ctrlcmd+alt+o',
+            keybinding: this.isElectron() ? 'ctrlcmd+o' : 'ctrlcmd+alt+o',
         });
         if (!isOSX && this.isElectron()) {
             keybindings.registerKeybinding({
@@ -127,6 +197,10 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
         keybindings.registerKeybinding({
             command: WorkspaceCommands.OPEN_RECENT_WORKSPACE.id,
             keybinding: 'ctrlcmd+alt+r',
+        });
+        keybindings.registerKeybinding({
+            command: WorkspaceCommands.SAVE_AS.id,
+            keybinding: 'ctrlcmd+shift+s',
         });
     }
 
@@ -144,7 +218,7 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
             canSelectFolders: true,
             canSelectFiles: true
         }, rootStat);
-        if (destinationUri) {
+        if (destinationUri && this.getCurrentWorkspaceUri().toString() !== destinationUri.toString()) {
             const destination = await this.fileSystem.getFileStat(destinationUri.toString());
             if (destination) {
                 if (destination.isDirectory) {
@@ -200,7 +274,8 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
         };
         const [rootStat] = await this.workspaceService.roots;
         const destinationFolderUri = await this.fileDialogService.showOpenDialog(props, rootStat);
-        if (destinationFolderUri) {
+        if (destinationFolderUri &&
+            this.getCurrentWorkspaceUri().toString() !== destinationFolderUri.toString()) {
             const destinationFolder = await this.fileSystem.getFileStat(destinationFolderUri.toString());
             if (destinationFolder && destinationFolder.isDirectory) {
                 this.workspaceService.open(destinationFolderUri);
@@ -215,7 +290,7 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
      * if it was successful. Otherwise, resolves to `undefined`.
      *
      * **Caveat**: this behaves differently on different platforms, the `workspace.supportMultiRootWorkspace` preference value **does** matter,
-     * and `electron`/`browser` version has impact too. See [here](https://github.com/theia-ide/theia/pull/3202#issuecomment-430884195) for more details.
+     * and `electron`/`browser` version has impact too. See [here](https://github.com/eclipse-theia/theia/pull/3202#issuecomment-430884195) for more details.
      *
      * Legend:
      *  - `workspace.supportMultiRootWorkspace` is `false`: => `N`
@@ -239,7 +314,8 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
         const props = await this.openWorkspaceOpenFileDialogProps();
         const [rootStat] = await this.workspaceService.roots;
         const workspaceFolderOrWorkspaceFileUri = await this.fileDialogService.showOpenDialog(props, rootStat);
-        if (workspaceFolderOrWorkspaceFileUri) {
+        if (workspaceFolderOrWorkspaceFileUri &&
+            this.getCurrentWorkspaceUri().toString() !== workspaceFolderOrWorkspaceFileUri.toString()) {
             const destinationFolder = await this.fileSystem.getFileStat(workspaceFolderOrWorkspaceFileUri.toString());
             if (destinationFolder) {
                 this.workspaceService.open(workspaceFolderOrWorkspaceFileUri);
@@ -287,7 +363,7 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
                 }
                 exist = await this.fileSystem.exists(selected.toString());
                 if (exist) {
-                    overwrite = await this.confirmOverwrite(selected); // TODO this should be handled differently in Electron.
+                    overwrite = await this.confirmOverwrite(selected);
                 }
             }
         } while (selected && exist && !overwrite);
@@ -297,7 +373,53 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
         }
     }
 
+    /**
+     * Save source `URI` to target.
+     *
+     * @param uri the source `URI`.
+     */
+    protected async saveAs(uri: URI): Promise<void> {
+        let exist: boolean = false;
+        let overwrite: boolean = false;
+        let selected: URI | undefined;
+        const stat = await this.fileSystem.getFileStat(uri.toString());
+        do {
+            selected = await this.fileDialogService.showSaveDialog(
+                {
+                    title: WorkspaceCommands.SAVE_AS.label!,
+                    filters: {},
+                    inputValue: uri.path.base
+                }, stat);
+            if (selected) {
+                exist = await this.fileSystem.exists(selected.toString());
+                if (exist) {
+                    overwrite = await this.confirmOverwrite(selected);
+                }
+            }
+        } while (selected && exist && !overwrite);
+        if (selected) {
+            try {
+                await this.commandRegistry.executeCommand(CommonCommands.SAVE.id);
+                await this.fileSystem.copy(uri.toString(), selected.toString(), { overwrite });
+            } catch (e) {
+                console.warn(e);
+            }
+        }
+    }
+
+    protected updateWorkspaceStateKey(): WorkspaceState {
+        if (this.workspaceService.opened) {
+            return this.workspaceService.isMultiRootWorkspaceOpened ? 'folder' : 'workspace';
+        }
+        return 'empty';
+    }
+
     private async confirmOverwrite(uri: URI): Promise<boolean> {
+        // Electron already handles the confirmation so do not prompt again.
+        if (this.isElectron()) {
+            return true;
+        }
+        // Prompt users for confirmation before overwriting.
         const confirmed = await new ConfirmDialog({
             title: 'Overwrite',
             msg: `Do you really want to overwrite "${uri.toString()}"?`
@@ -307,6 +429,15 @@ export class WorkspaceFrontendContribution implements CommandContribution, Keybi
 
     private isElectron(): boolean {
         return environment.electron.is();
+    }
+
+    /**
+     * Get the current workspace URI.
+     *
+     * @returns the current workspace URI.
+     */
+    private getCurrentWorkspaceUri(): URI {
+        return new URI(this.workspaceService.workspace && this.workspaceService.workspace.uri);
     }
 
 }

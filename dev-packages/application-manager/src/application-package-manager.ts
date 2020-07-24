@@ -50,7 +50,7 @@ export class ApplicationPackageManager {
     async clean(): Promise<void> {
         await this.remove(this.pck.lib());
         await this.remove(this.pck.srcGen());
-        await this.remove(this.webpack.configPath);
+        await this.remove(this.webpack.genConfigPath);
     }
 
     async generate(): Promise<void> {
@@ -70,25 +70,42 @@ export class ApplicationPackageManager {
         return this.__process.run('webpack', args);
     }
 
-    async start(args: string[] = []): Promise<void> {
+    start(args: string[] = []): cp.ChildProcess {
         if (this.pck.isElectron()) {
             return this.startElectron(args);
         }
         return this.startBrowser(args);
     }
 
-    async startElectron(args: string[]): Promise<void> {
-        this.__process.spawnBin('electron', [this.pck.frontend('electron-main.js'), ...args],
-            { stdio: [0, 1, 2] });
+    startElectron(args: string[]): cp.ChildProcess {
+        // If possible, pass the project root directory to electron rather than the script file so that Electron
+        // can determine the app name. This requires that the package.json has a main field.
+        let appPath = this.pck.projectPath;
+
+        if (!this.pck.pck.main) {
+            appPath = this.pck.frontend('electron-main.js');
+
+            console.warn(
+                `WARNING: ${this.pck.packagePath} does not have a "main" entry.\n` +
+                'Please add the following line:\n' +
+                '    "main": "src-gen/frontend/electron-main.js"'
+            );
+        }
+
+        const { mainArgs, options } = this.adjustArgs([ appPath, ...args ]);
+        const electronCli = require.resolve('electron/cli.js', { paths: [this.pck.projectPath] });
+        return this.__process.fork(electronCli, mainArgs, options);
     }
 
-    async startBrowser(args: string[]): Promise<void> {
-        const options: cp.ForkOptions = {
-            stdio: [0, 1, 2, 'ipc'],
-            env: {
-                ...process.env,
-                THEIA_PARENT_PID: String(process.pid)
-            }
+    startBrowser(args: string[]): cp.ChildProcess {
+        const { mainArgs, options } = this.adjustArgs(args);
+        return this.__process.fork(this.pck.backend('main.js'), mainArgs, options);
+    }
+
+    private adjustArgs(args: string[], forkOptions: cp.ForkOptions = {}): Readonly<{ mainArgs: string[]; options: cp.ForkOptions }> {
+        const options = {
+            ...this.forkOptions,
+            forkOptions
         };
         const mainArgs = [...args];
         const inspectIndex = mainArgs.findIndex(v => v.startsWith('--inspect'));
@@ -96,7 +113,20 @@ export class ApplicationPackageManager {
             const inspectArg = mainArgs.splice(inspectIndex, 1)[0];
             options.execArgv = ['--nolazy', inspectArg];
         }
-        this.__process.fork(this.pck.backend('main.js'), mainArgs, options);
+        return {
+            mainArgs,
+            options
+        };
+    }
+
+    private get forkOptions(): cp.ForkOptions {
+        return {
+            stdio: [0, 1, 2, 'ipc'],
+            env: {
+                ...process.env,
+                THEIA_PARENT_PID: String(process.pid)
+            }
+        };
     }
 
 }

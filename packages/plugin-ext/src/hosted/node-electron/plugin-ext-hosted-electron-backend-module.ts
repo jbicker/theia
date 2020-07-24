@@ -14,7 +14,6 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { HostedInstanceManager, ElectronNodeHostedPluginRunner } from '../node/hosted-instance-manager';
 import { interfaces } from 'inversify';
 import { bindCommonHostedBackend } from '../node/plugin-ext-hosted-backend-module';
 import { PluginScanner } from '../../common/plugin-protocol';
@@ -23,6 +22,5 @@ import { TheiaPluginScannerElectron } from './scanner-theia-electron';
 export function bindElectronBackend(bind: interfaces.Bind): void {
     bindCommonHostedBackend(bind);
 
-    bind(HostedInstanceManager).to(ElectronNodeHostedPluginRunner);
     bind(PluginScanner).to(TheiaPluginScannerElectron).inSingletonScope();
 }

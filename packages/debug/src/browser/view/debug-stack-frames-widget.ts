@@ -21,6 +21,7 @@ import { SourceTreeWidget, TreeElementNode } from '@theia/core/lib/browser/sourc
 import { DebugStackFramesSource, LoadMoreStackFrames } from './debug-stack-frames-source';
 import { DebugStackFrame } from '../model/debug-stack-frame';
 import { DebugViewModel } from './debug-view-model';
+import { DebugCallStackItemTypeKey } from '../debug-call-stack-item-type-key';
 
 @injectable()
 export class DebugStackFramesWidget extends SourceTreeWidget {
@@ -46,6 +47,9 @@ export class DebugStackFramesWidget extends SourceTreeWidget {
 
     @inject(DebugViewModel)
     protected readonly viewModel: DebugViewModel;
+
+    @inject(DebugCallStackItemTypeKey)
+    protected readonly debugCallStackItemTypeKey: DebugCallStackItemTypeKey;
 
     @postConstruct()
     protected init(): void {
@@ -88,11 +92,31 @@ export class DebugStackFramesWidget extends SourceTreeWidget {
             if (TreeElementNode.is(node)) {
                 if (node.element instanceof DebugStackFrame) {
                     node.element.thread.currentFrame = node.element;
+                    this.debugCallStackItemTypeKey.set('stackFrame');
                 }
             }
         } finally {
             this.updatingSelection = false;
         }
+    }
+
+    protected toContextMenuArgs(node: SelectableTreeNode): [string | number] | undefined {
+        if (TreeElementNode.is(node)) {
+            if (node.element instanceof DebugStackFrame) {
+                const source = node.element.source;
+                if (source) {
+                    if (source.inMemory) {
+                        const path = source.raw.path || source.raw.sourceReference;
+                        if (path !== undefined) {
+                            return [path];
+                        }
+                    } else {
+                        return [source.uri.toString()];
+                    }
+                }
+            }
+        }
+        return undefined;
     }
 
     protected handleClickEvent(node: TreeNode | undefined, event: React.MouseEvent<HTMLElement>): void {

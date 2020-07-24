@@ -14,7 +14,7 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-// tslint:disable:no-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { IWebSocket } from 'vscode-ws-jsonrpc/lib/socket/socket';
 import { Disposable, DisposableCollection } from '../disposable';
@@ -42,7 +42,7 @@ export class WebSocketChannel implements IWebSocket {
         }
     }
 
-    handleMessage(message: WebSocketChannel.Message) {
+    handleMessage(message: WebSocketChannel.Message): void {
         if (message.kind === 'ready') {
             this.fireOpen();
         } else if (message.kind === 'data') {
@@ -79,7 +79,25 @@ export class WebSocketChannel implements IWebSocket {
     }
 
     close(code: number = 1000, reason: string = ''): void {
+        if (this.closing) {
+            // Do not try to close the channel if it is already closing.
+            return;
+        }
         this.checkNotDisposed();
+        this.doSend(JSON.stringify(<WebSocketChannel.CloseMessage>{
+            kind: 'close',
+            id: this.id,
+            code,
+            reason
+        }));
+        this.fireClose(code, reason);
+    }
+
+    tryClose(code: number = 1000, reason: string = ''): void {
+        if (this.closing || this.toDispose.disposed) {
+            // Do not try to close the channel if it is already closing or disposed.
+            return;
+        }
         this.doSend(JSON.stringify(<WebSocketChannel.CloseMessage>{
             kind: 'close',
             id: this.id,

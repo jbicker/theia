@@ -19,12 +19,21 @@ import { VariableResolverService } from '@theia/variable-resolver/lib/browser';
 import { TaskResolver } from '../task-contribution';
 import { TaskConfiguration } from '../../common/task-protocol';
 import { ProcessTaskConfiguration } from '../../common/process/task-protocol';
+import { TaskDefinitionRegistry } from '../task-definition-registry';
+import URI from '@theia/core/lib/common/uri';
+import { WorkspaceService } from '@theia/workspace/lib/browser';
 
 @injectable()
 export class ProcessTaskResolver implements TaskResolver {
 
     @inject(VariableResolverService)
     protected readonly variableResolverService: VariableResolverService;
+
+    @inject(TaskDefinitionRegistry)
+    protected readonly taskDefinitionRegistry: TaskDefinitionRegistry;
+
+    @inject(WorkspaceService)
+    protected readonly workspaceService: WorkspaceService;
 
     /**
      * Perform some adjustments to the task launch configuration, before sending
@@ -36,19 +45,43 @@ export class ProcessTaskResolver implements TaskResolver {
         if (taskConfig.type !== 'process' && taskConfig.type !== 'shell') {
             throw new Error('Unsupported task configuration type.');
         }
+        const context = typeof taskConfig._scope === 'string' ? new URI(taskConfig._scope) : undefined;
+        const variableResolverOptions = {
+            context, configurationSection: 'tasks'
+        };
         const processTaskConfig = taskConfig as ProcessTaskConfiguration;
+        let cwd = processTaskConfig.options && processTaskConfig.options.cwd;
+        if (!cwd) {
+            const rootURI = this.workspaceService.getWorkspaceRootUri(context);
+            if (rootURI) {
+                cwd = rootURI.toString();
+            }
+        }
+
         const result: ProcessTaskConfiguration = {
-            type: processTaskConfig.type,
-            label: processTaskConfig.label,
-            command: await this.variableResolverService.resolve(processTaskConfig.command),
-            args: processTaskConfig.args ? await this.variableResolverService.resolveArray(processTaskConfig.args) : undefined,
-            options: processTaskConfig.options,
+            ...processTaskConfig,
+            command: await this.variableResolverService.resolve(processTaskConfig.command, variableResolverOptions),
+            args: processTaskConfig.args ? await this.variableResolverService.resolveArray(processTaskConfig.args, variableResolverOptions) : undefined,
             windows: processTaskConfig.windows ? {
-                command: await this.variableResolverService.resolve(processTaskConfig.windows.command),
-                args: processTaskConfig.args ? await this.variableResolverService.resolveArray(processTaskConfig.args) : undefined,
+                command: await this.variableResolverService.resolve(processTaskConfig.windows.command, variableResolverOptions),
+                args: processTaskConfig.windows.args ? await this.variableResolverService.resolveArray(processTaskConfig.windows.args, variableResolverOptions) : undefined,
                 options: processTaskConfig.windows.options
             } : undefined,
-            cwd: await this.variableResolverService.resolve(processTaskConfig.cwd ? processTaskConfig.cwd : '${workspaceFolder}')
+            osx: processTaskConfig.osx ? {
+                command: await this.variableResolverService.resolve(processTaskConfig.osx.command, variableResolverOptions),
+                args: processTaskConfig.osx.args ? await this.variableResolverService.resolveArray(processTaskConfig.osx.args, variableResolverOptions) : undefined,
+                options: processTaskConfig.osx.options
+            } : undefined,
+            linux: processTaskConfig.linux ? {
+                command: await this.variableResolverService.resolve(processTaskConfig.linux.command, variableResolverOptions),
+                args: processTaskConfig.linux.args ? await this.variableResolverService.resolveArray(processTaskConfig.linux.args, variableResolverOptions) : undefined,
+                options: processTaskConfig.linux.options
+            } : undefined,
+            options: {
+                cwd: await this.variableResolverService.resolve(cwd, variableResolverOptions),
+                env: processTaskConfig.options && processTaskConfig.options.env,
+                shell: processTaskConfig.options && processTaskConfig.options.shell
+            }
         };
         return result;
     }

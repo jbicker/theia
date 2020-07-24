@@ -40,17 +40,27 @@ export class MonacoStatusBarContribution implements FrontendApplicationContribut
         const editorModel = this.getModel(editor);
         if (editor && editorModel) {
             this.setConfigTabSizeWidget();
+            this.setLineEndingWidget();
 
             this.toDispose.dispose();
             this.toDispose.push(editorModel.onDidChangeOptions(() => {
                 this.setConfigTabSizeWidget();
+                this.setLineEndingWidget();
+            }));
+            let previous = editorModel.getEOL();
+            this.toDispose.push(editorModel.onDidChangeContent(e => {
+                if (previous !== e.eol) {
+                    previous = e.eol;
+                    this.setLineEndingWidget();
+                }
             }));
         } else {
             this.removeConfigTabSizeWidget();
+            this.removeLineEndingWidget();
         }
     }
 
-    protected setConfigTabSizeWidget() {
+    protected setConfigTabSizeWidget(): void {
         const editor = this.editorManager.currentEditor;
         const editorModel = this.getModel(editor);
         if (editor && editorModel) {
@@ -61,16 +71,36 @@ export class MonacoStatusBarContribution implements FrontendApplicationContribut
                 text: `${useSpaceOrTab}: ${tabSize}`,
                 alignment: StatusBarAlignment.RIGHT,
                 priority: 10,
-                command: EditorCommands.CONFIG_INDENTATION.id
+                command: EditorCommands.CONFIG_INDENTATION.id,
+                tooltip: 'Select Indentation'
             });
         }
     }
-    protected removeConfigTabSizeWidget() {
+    protected removeConfigTabSizeWidget(): void {
         this.statusBar.removeElement('editor-status-tabbing-config');
+    }
+
+    protected setLineEndingWidget(): void {
+        const editor = this.editorManager.currentEditor;
+        const editorModel = this.getModel(editor);
+        if (editor && editorModel) {
+            const eol = editorModel.getEOL();
+            const text = eol === '\n' ? 'LF' : 'CRLF';
+            this.statusBar.setElement('editor-status-eol', {
+                text: `${text}`,
+                alignment: StatusBarAlignment.RIGHT,
+                priority: 11,
+                command: EditorCommands.CONFIG_EOL.id,
+                tooltip: 'Select End Of Line Sequence'
+            });
+        }
+    }
+    protected removeLineEndingWidget(): void {
+        this.statusBar.removeElement('editor-status-eol');
     }
 
     protected getModel(editor: EditorWidget | undefined): monaco.editor.IModel | undefined {
         const monacoEditor = MonacoEditor.get(editor);
-        return monacoEditor && monacoEditor.getControl().getModel();
+        return monacoEditor && monacoEditor.getControl().getModel() || undefined;
     }
 }

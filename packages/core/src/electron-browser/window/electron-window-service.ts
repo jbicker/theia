@@ -16,13 +16,24 @@
 
 import { injectable } from 'inversify';
 import { ipcRenderer } from 'electron';
-import { DefaultWindowService } from '../../browser/window/window-service';
+import { NewWindowOptions } from '../../browser/window/window-service';
+import { DefaultWindowService } from '../../browser/window/default-window-service';
 
 @injectable()
 export class ElectronWindowService extends DefaultWindowService {
 
-    openNewWindow(url: string): void {
-        ipcRenderer.send('create-new-window', url);
+    openNewWindow(url: string, { external }: NewWindowOptions = {}): undefined {
+        if (external) {
+            ipcRenderer.send('open-external', url);
+        } else {
+            ipcRenderer.send('create-new-window', url);
+        }
+        return undefined;
+    }
+
+    protected preventUnload(event: BeforeUnloadEvent): string | void {
+        // The user will be shown a confirmation dialog by the will-prevent-unload handler in the Electron main script
+        event.returnValue = false;
     }
 
 }

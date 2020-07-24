@@ -22,6 +22,14 @@ export interface SearchInWorkspaceOptions {
      */
     maxResults?: number;
     /**
+     * accepts suffixes of K, M or G which correspond to kilobytes,
+     * megabytes and gigabytes, respectively. If no suffix is provided the input is
+     * treated as bytes.
+     *
+     * defaults to '20M'
+     */
+    maxFileSize?: string;
+    /**
      * Search case sensitively if true.
      */
     matchCase?: boolean;
@@ -44,15 +52,27 @@ export interface SearchInWorkspaceOptions {
     /**
      * Glob pattern for matching files and directories to exclude the search.
      */
-    exclude?: string[]
+    exclude?: string[];
 }
 
 export interface SearchInWorkspaceResult {
     /**
-     * The path to the file containing the result.
+     * The string uri to the root folder that the search was performed.
      */
-    file: string;
+    root: string;
 
+    /**
+     * The string uri to the file containing the result.
+     */
+    fileUri: string;
+
+    /**
+     * matches found in the file
+     */
+    matches: SearchMatch[];
+}
+
+export interface SearchMatch {
     /**
      * The (1-based) line number of the result.
      */
@@ -73,7 +93,13 @@ export interface SearchInWorkspaceResult {
     /**
      * The text of the line containing the result.
      */
-    lineText: string;
+    lineText: string | LinePreview;
+
+}
+
+export interface LinePreview {
+    text: string;
+    character: number;
 }
 
 export namespace SearchInWorkspaceResult {
@@ -81,20 +107,11 @@ export namespace SearchInWorkspaceResult {
      * Sort search in workspace results according to file, line, character position
      * and then length.
      */
-    export function compare(a: SearchInWorkspaceResult, b: SearchInWorkspaceResult) {
-        if (a.file !== b.file) {
-            return a.file < b.file ? -1 : 1;
+    export function compare(a: SearchInWorkspaceResult, b: SearchInWorkspaceResult): number {
+        if (a.fileUri !== b.fileUri) {
+            return a.fileUri < b.fileUri ? -1 : 1;
         }
-
-        if (a.line !== b.line) {
-            return a.line - b.line;
-        }
-
-        if (a.character !== b.character) {
-            return a.character - b.character;
-        }
-
-        return a.length - b.length;
+        return 0;
     }
 }
 
@@ -111,12 +128,13 @@ export interface SearchInWorkspaceClient {
     onDone(searchId: number, error?: string): void;
 }
 
+export const SIW_WS_PATH = '/services/search-in-workspace';
 export const SearchInWorkspaceServer = Symbol('SearchInWorkspaceServer');
 export interface SearchInWorkspaceServer extends JsonRpcServer<SearchInWorkspaceClient> {
     /**
-     * Start a search for WHAT in directory ROOT.  Return a unique search id.
+     * Start a search for WHAT in directories ROOTURIS. Return a unique search id.
      */
-    search(what: string, rootUri: string, opts?: SearchInWorkspaceOptions): Promise<number>;
+    search(what: string, rootUris: string[], opts?: SearchInWorkspaceOptions): Promise<number>;
 
     /**
      * Cancel an ongoing search.

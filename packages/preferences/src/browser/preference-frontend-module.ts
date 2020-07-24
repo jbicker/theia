@@ -14,46 +14,36 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { ContainerModule, interfaces, } from 'inversify';
-import { PreferenceProvider, PreferenceScope } from '@theia/core/lib/browser/preferences';
-import { UserPreferenceProvider } from './user-preference-provider';
-import { WorkspacePreferenceProvider } from './workspace-preference-provider';
-import { bindViewContribution, WidgetFactory, FrontendApplicationContribution } from '@theia/core/lib/browser';
-import { PreferencesContribution } from './preferences-contribution';
-import { createPreferencesTreeWidget } from './preference-tree-container';
-import { PreferencesMenuFactory } from './preferences-menu-factory';
-import { PreferencesContainer, PreferencesEditorsContainer, PreferencesTreeWidget } from './preferences-tree-widget';
-import { PreferencesFrontendApplicationContribution } from './preferences-frontend-application-contribution';
-
+import '../../src/browser/style/index.css';
 import './preferences-monaco-contribution';
+import { ContainerModule, interfaces } from 'inversify';
+import { bindViewContribution } from '@theia/core/lib/browser';
+import { TabBarToolbarContribution } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
+import { PreferenceTreeGenerator } from './util/preference-tree-generator';
+import { bindPreferenceProviders } from './preference-bindings';
+import { bindPreferencesWidgets } from './views/preference-widget-bindings';
+import { PreferencesEventService } from './util/preference-event-service';
+import { PreferencesTreeProvider } from './preference-tree-provider';
+import { PreferencesContribution } from './preference-contribution';
+import { PreferenceScopeCommandManager } from './util/preference-scope-command-manager';
+import { JsonSchemaContribution } from '@theia/core/lib/browser/json-schema-store';
+import { PreferencesJsonSchemaContribution } from './preferences-json-schema-contribution';
 
 export function bindPreferences(bind: interfaces.Bind, unbind: interfaces.Unbind): void {
-    unbind(PreferenceProvider);
+    bindPreferenceProviders(bind, unbind);
+    bindPreferencesWidgets(bind);
 
-    bind(PreferenceProvider).to(UserPreferenceProvider).inSingletonScope().whenTargetNamed(PreferenceScope.User);
-    bind(PreferenceProvider).to(WorkspacePreferenceProvider).inSingletonScope().whenTargetNamed(PreferenceScope.Workspace);
+    bind(PreferencesEventService).toSelf().inSingletonScope();
+    bind(PreferencesTreeProvider).toSelf().inSingletonScope();
+    bind(PreferenceTreeGenerator).toSelf().inSingletonScope();
 
     bindViewContribution(bind, PreferencesContribution);
 
-    bind(PreferencesContainer).toSelf();
-    bind(WidgetFactory).toDynamicValue(({ container }) => ({
-        id: PreferencesContainer.ID,
-        createWidget: () => container.get(PreferencesContainer)
-    }));
+    bind(PreferenceScopeCommandManager).toSelf().inSingletonScope();
+    bind(TabBarToolbarContribution).toService(PreferencesContribution);
 
-    bind(WidgetFactory).toDynamicValue(({ container }) => ({
-        id: PreferencesTreeWidget.ID,
-        createWidget: () => createPreferencesTreeWidget(container)
-    })).inSingletonScope();
-
-    bind(PreferencesEditorsContainer).toSelf();
-    bind(WidgetFactory).toDynamicValue(({ container }) => ({
-        id: PreferencesEditorsContainer.ID,
-        createWidget: () => container.get(PreferencesEditorsContainer)
-    }));
-
-    bind(PreferencesMenuFactory).toSelf();
-    bind(FrontendApplicationContribution).to(PreferencesFrontendApplicationContribution).inSingletonScope();
+    bind(PreferencesJsonSchemaContribution).toSelf().inSingletonScope();
+    bind(JsonSchemaContribution).toService(PreferencesJsonSchemaContribution);
 }
 
 export default new ContainerModule((bind, unbind, isBound, rebind) => {

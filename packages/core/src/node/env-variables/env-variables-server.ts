@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
+ * Copyright (C) 2018-2020 Red Hat, Inc. and others.
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License v. 2.0 which is available at
@@ -14,19 +14,38 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+import { join } from 'path';
+import { homedir } from 'os';
 import { injectable } from 'inversify';
 import { EnvVariable, EnvVariablesServer } from '../../common/env-variables';
+import { isWindows } from '../../common/os';
+import { FileUri } from '../file-uri';
 
 @injectable()
 export class EnvVariablesServerImpl implements EnvVariablesServer {
 
     protected readonly envs: { [key: string]: EnvVariable } = {};
+    protected readonly configDirUri: Promise<string>;
 
     constructor() {
+        this.configDirUri = this.createConfigDirUri();
+        this.configDirUri.then(configDirUri => console.log(`Configuration directory URI: '${configDirUri}'`));
         const prEnv = process.env;
         Object.keys(prEnv).forEach((key: string) => {
-            this.envs[key] = {'name' : key, 'value' : prEnv[key]};
+            let keyName = key;
+            if (isWindows) {
+                keyName = key.toLowerCase();
+            }
+            this.envs[keyName] = { 'name': keyName, 'value': prEnv[key] };
         });
+    }
+
+    protected async createConfigDirUri(): Promise<string> {
+        return FileUri.create(process.env.THEIA_CONFIG_DIR || join(homedir(), '.theia')).toString();
+    }
+
+    async getExecPath(): Promise<string> {
+        return process.execPath;
     }
 
     async getVariables(): Promise<EnvVariable[]> {
@@ -34,6 +53,14 @@ export class EnvVariablesServerImpl implements EnvVariablesServer {
     }
 
     async getValue(key: string): Promise<EnvVariable | undefined> {
+        if (isWindows) {
+            key = key.toLowerCase();
+        }
         return this.envs[key];
     }
+
+    getConfigDirUri(): Promise<string> {
+        return this.configDirUri;
+    }
+
 }

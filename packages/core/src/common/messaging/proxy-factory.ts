@@ -14,6 +14,8 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 import { MessageConnection, ResponseError } from 'vscode-jsonrpc';
 import { ApplicationError } from '../application-error';
 import { Event, Emitter } from '../event';
@@ -27,6 +29,7 @@ export type JsonRpcServer<Client> = Disposable & {
      * to handle JSON-RPC messages from the remote server.
      */
     setClient(client: Client | undefined): void;
+    getClient?(): Client | undefined;
 };
 
 export interface JsonRpcConnectionEventEmitter {
@@ -127,7 +130,7 @@ export class JsonRpcProxyFactory<T extends object> implements ProxyHandler<T> {
      * This connection will be used to send/receive JSON-RPC requests and
      * response.
      */
-    listen(connection: MessageConnection) {
+    listen(connection: MessageConnection): void {
         if (this.target) {
             for (const prop in this.target) {
                 if (typeof this.target[prop] === 'function') {
@@ -218,6 +221,9 @@ export class JsonRpcProxyFactory<T extends object> implements ProxyHandler<T> {
                 this.target = client;
             };
         }
+        if (p === 'getClient') {
+            return () => this.target;
+        }
         if (p === 'onDidOpenConnection') {
             return this.onDidOpenConnectionEmitter.event;
         }
@@ -271,7 +277,7 @@ export class JsonRpcProxyFactory<T extends object> implements ProxyHandler<T> {
     }
     protected deserializeError(capturedError: Error, e: any): any {
         if (e instanceof ResponseError) {
-            const capturedStack = capturedError.stack || '';
+            const capturedStack = capturedError.stack || '';
             if (e.data && e.data.kind === 'application') {
                 const { stack, data, message } = e.data;
                 return ApplicationError.fromJson(e.code, {

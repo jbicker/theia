@@ -20,15 +20,26 @@ import { DugiteGit } from '../dugite-git';
 import { bindGit, GitBindingOptions } from '../git-backend-module';
 import { bindLogger } from '@theia/core/lib/node/logger-backend-module';
 import { NoSyncRepositoryManager } from '.././test/no-sync-repository-manager';
+import { GitEnvProvider, DefaultGitEnvProvider } from '../env/git-env-provider';
+import { MessageService, LogLevel } from '@theia/core/lib/common';
+import { MessageClient } from '@theia/core';
+import { ILogger } from '@theia/core/lib/common/logger';
 
-// tslint:disable-next-line:no-any
-export function initializeBindings(): { container: Container, bind: any } {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function initializeBindings(): { container: Container, bind: interfaces.Bind } {
     const container = new Container();
     const bind = container.bind.bind(container);
+    bind(DefaultGitEnvProvider).toSelf().inRequestScope();
+    bind(GitEnvProvider).toService(DefaultGitEnvProvider);
+    bind(MessageService).toSelf();
+    bind(MessageClient).toSelf();
     bindLogger(bind);
     return { container, bind };
 }
 
+/**
+ * For testing only.
+ */
 export async function createGit(bindingOptions: GitBindingOptions = GitBindingOptions.Default): Promise<Git> {
     const { container, bind } = initializeBindings();
     bindGit(bind, {
@@ -36,5 +47,8 @@ export async function createGit(bindingOptions: GitBindingOptions = GitBindingOp
             return binding.to(NoSyncRepositoryManager).inSingletonScope();
         }
     });
-    return container.get(DugiteGit);
+    (container.get(ILogger) as ILogger).setLogLevel(LogLevel.ERROR);
+    const git = container.get(DugiteGit);
+    await git.exec({ localUri: '' }, ['--version']); // Enforces eager Git initialization by setting the `LOCAL_GIT_DIRECTORY` and `GIT_EXEC_PATH` env variables.
+    return git;
 }
